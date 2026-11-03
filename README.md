@@ -81,12 +81,12 @@ bash build_mac.sh
 | 界面空白 | 已用 AppKit 原生 UI 规避 Tk 9.0 bug；若仍空白请重打包 |
 | 点击无反应 | 辅助功能授权未勾选，或需在「开始」前授权 |
 | 热键无效 | 已用双通道（NSEvent + Quartz）加固；**改用"动一下鼠标"停止** |
-| 重打包后要重新授权 | adhoc 签名下代码改动会改签名哈希；已固定 Bundle ID `com.wanglin.autoclicker` 缓解 |
+| 重打包后要重新授权 | adhoc 签名下代码改动会改签名哈希；已固定 Bundle ID `com.bingostudio.autoclicker` 缓解 |
 | 首次打开 .app 被拦截 | 系统设置 → 隐私与安全性 → 仍要打开 |
 
 ## 打包（build_mac.sh）
 
-- 固定 Bundle ID：`com.wanglin.autoclicker`
+- 固定 Bundle ID：`com.bingostudio.autoclicker`
 - 平台：macOS arm64，adhoc 签名
 - 用 `--noconfirm` 自动覆盖旧包，配合固定 Bundle ID 降低重授权频率
 
