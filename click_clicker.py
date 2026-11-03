@@ -11,6 +11,9 @@ AutoClicker —— macOS 自动点击器（AppKit 原生 UI）
     ③ 界面"停止"按钮
 - 平台：macOS（需辅助功能权限：系统设置→隐私与安全性→辅助功能→勾选本程序）
 - 仅限单机本地测试
+
+Bingo Studio · wljimmy@hotmail.com
+本项目由 wljimmy 使用豆包 AI 完成
 """
 
 import os
