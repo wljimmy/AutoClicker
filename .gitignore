@@ -1,7 +1,9 @@
 build/
 dist/
-*.spec
 __pycache__/
 *.pyc
 stop.flag
 .DS_Store
+saved_coords.json
+assets/AppIcon.iconset/
+assets/app_icon_2048.png

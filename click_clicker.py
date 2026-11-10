@@ -18,6 +18,7 @@ Bingo Studio · wljimmy@hotmail.com
 
 import os
 import time
+import json
 import threading
 import collections
 
@@ -27,15 +28,17 @@ from Foundation import (
 )
 from AppKit import (
     NSApplication, NSWindow, NSButton, NSTextField, NSTextView, NSScrollView,
-    NSPopUpButton, NSFont, NSColor, NSBackingStoreBuffered,
+    NSPopUpButton, NSFont, NSColor, NSBackingStoreBuffered, NSSound,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable, NSWindowStyleMaskResizable,
     NSApplicationActivationPolicyRegular,
-    NSAlert, NSWorkspace, NSBox,
+    NSAlert, NSWorkspace, NSBox, NSAlertFirstButtonReturn,
     NSEvent, NSCommandKeyMask, NSShiftKeyMask,
     NSEventMaskKeyDown, NSEventMaskMouseMoved,
     NSMutableAttributedString, NSForegroundColorAttributeName,
     NSFontAttributeName,
+    NSLineBreakByWordWrapping,
+    NSTextAlignmentRight,
 )
 
 # ======================= Quartz（macOS 专用） =======================
@@ -78,6 +81,166 @@ MAX_RUNTIME_SEC = 3600        # 硬性最长运行 60 分钟，杜绝超长任�
 MAX_COUNT = 1_000_000         # 单次最多点击次数上限
 STOP_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop.flag")
 
+VERSION = "0.4.0-alpha"   # 版本号：UI 副标题 + 关于面板展示
+GITHUB_URL = "https://github.com/wljimmy/AutoClicker"
+# 版权三行（verbatim，用户锁定）
+COPYRIGHT_1 = "Bingo Studio"
+COPYRIGHT_2 = "wljimmy@hotmail.com"
+COPYRIGHT_3 = "本项目是由wljimmy使用doubao AI完成"
+SAVED_COORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_coords.json")
+
+# ---- 鼠标晃动打断检测（打断性晃动 = 2 秒内 ≥3 次来回，每段 ≥200px） ----
+SWING_MIN_DIST = 200.0        # 相邻两个方向顶点之间最小距离(px)，>= 才算一次晃动段
+SWING_REQUIRED = 3            # 2 秒窗口内需要的晃动次数
+SWING_WINDOW = 2.0            # 晃动计数时间窗(秒)
+SWING_IDLE_SEC = 0.5          # 暂停后鼠标停止多久无晃动 → 自动恢复(秒)
+
+
+# ======================= 国际化 / 多语言（可扩展） =======================
+# 新增语言：在 LANGUAGES 与 I18N 各 key 里补一项即可，UI 无需改动。
+LANGUAGES = ["中文", "English"]          # 对应 I18N 的 key 顺序：zh / en
+LANG_KEYS = ["zh", "en"]
+current_lang = "zh"                        # 默认中文
+
+I18N = {
+    # ---- 标题 ----
+    "app_title":   {"zh": "AutoClicker", "en": "AutoClicker"},
+    "app_sub":     {"zh": "macOS 自动点击器 · 坐标拾取 · 全局热键停止",
+                    "en": "macOS Auto Clicker · Pick Coords · Global Hotkey Stop"},
+    # ---- ① 坐标拾取 ----
+    "grp1":        {"zh": "① 坐标拾取", "en": "① Pick Coordinates"},
+    "lbl_x":       {"zh": "坐标 X:", "en": "X:"},
+    "lbl_y":       {"zh": "Y:", "en": "Y:"},
+    "lbl_int":     {"zh": "间隔(ms):", "en": "Interval(ms):"},
+    "tip_interval": {"zh": "越小越快 · 游戏约 50 次/秒有效",
+                     "en": "Smaller = Faster · ~50/s effective"},
+    "btn_pick":    {"zh": "📌 拾取坐标 (5s)", "en": "📌 Pick (5s)"},
+    "btn_test":    {"zh": "🎯 测试坐标", "en": "🎯 Test"},
+    "tip_pick_tt": {"zh": "点击后 5 秒倒计时，结束时读取鼠标位置并填入坐标框",
+                    "en": "5s countdown then read mouse pos"},
+    "tip_test_tt": {"zh": "在坐标框当前位置执行一次点击，校验坐标是否准确",
+                    "en": "click once at coords"},
+    "lbl_pick_ready": {"zh": "倒计时：就绪（点后把鼠标移到目标点）",
+                       "en": "Countdown: Ready (move mouse to target)"},
+    # ---- ② 运行设置 ----
+    "grp2":        {"zh": "② 运行设置", "en": "② Run Settings"},
+    "lbl_mode":    {"zh": "运行模式:", "en": "Mode:"},
+    "mode_duration": {"zh": "按时长(秒)", "en": "Duration(s)"},
+    "mode_count":  {"zh": "按次数", "en": "Count"},
+    "lbl_value":   {"zh": "数值:", "en": "Value:"},
+    "tip_stop":    {"zh": "停止：⌘Cmd+Shift+X / 停止按钮 / 自动到点",
+                    "en": "Stop: ⌘Cmd+Shift+X / Button / Auto"},
+    # ---- ③ 控制 ----
+    "grp3":        {"zh": "③ 控制", "en": "③ Controls"},
+    "btn_start":   {"zh": "▶ 开始", "en": "▶ Start"},
+    "btn_test10":  {"zh": "测试 10 秒", "en": "Test 10s"},
+    "btn_stop":    {"zh": "■ 停止", "en": "■ Stop"},
+    "status_idle": {"zh": "状态：空闲", "en": "Status: Idle"},
+    "status_run":  {"zh": "状态：运行中", "en": "Status: Running"},
+    "lbl_count":   {"zh": "已投递：{n} 次", "en": "Sent: {n}"},
+    "lbl_rate":    {"zh": "速率：{r:.1f} 次/秒", "en": "Rate: {r:.1f}/s"},
+    "log_title":   {"zh": "运行日志", "en": "Run Log"},
+    # ---- 日志动态文字 ----
+    "log_ready":    {"zh": "就绪。", "en": "Ready"},
+    "log_stopways": {"zh": "停止方式：动鼠标 / ⌘Cmd+Shift+X / F9 / 按钮 / 最长60分钟",
+                     "en": "Stop: move mouse / ⌘Cmd+Shift+X / F9 / Button / max 60min"},
+    "log_pause":    {"zh": "🖱 检测到鼠标移动，已暂停（晃动3次弹窗 / 停住0.5秒自动恢复 / 可划去窗口点按钮）",
+                     "en": "🖱 Mouse moved — paused (shake×3 dialog / idle 0.5s auto-resume / move to window)"},
+    "log_swing":    {"zh": "🌀 检测到剧烈晃动，弹确认框…",
+                     "en": "🌀 Vigorous shake detected — asking…"},
+    "log_swing_count": {"zh": "🔄 晃动段 +1（2秒内 {n} 次）",
+                        "en": "🔄 Swing +1 ({n} in 2s)"},
+    "log_resumed":  {"zh": "▶ 已继续（从暂停点恢复）", "en": "▶ Resumed (from pause)"},
+    "log_autoresume": {"zh": "⏩ 鼠标已停止，自动恢复", "en": "⏩ Mouse idle — auto resumed"},
+    "log_stopped_swing": {"zh": "⏹ 已中断（晃动打断）", "en": "⏹ Stopped (shake interrupt)"},
+    "alert_pause":  {"zh": "点击已暂停", "en": "Clicking paused"},
+    "msg_swing":    {"zh": "检测到鼠标剧烈晃动。\n『继续』从暂停点恢复点击，『中断』停止。",
+                     "en": "Vigorous mouse shake detected.\nContinue to resume, or Stop to end."},
+    "btn_continue": {"zh": "继续", "en": "Continue"},
+    "btn_stop":     {"zh": "中断", "en": "Stop"},
+    "log_countdown": {"zh": "倒计时：{n}s（请把鼠标移到目标点）",
+                      "en": "Countdown: {n}s (move mouse to target)"},
+    "log_picked":   {"zh": "✅ 拾取完成：({x}, {y})", "en": "✅ Picked: ({x}, {y})"},
+    "log_pickcoord": {"zh": "📌 拾取坐标：({x}, {y})（已填入坐标框）",
+                      "en": "📌 Picked: ({x}, {y}) (filled in)"},
+    "log_testclick": {"zh": "🎯 测试坐标点击：({x}, {y})（若弹窗/按钮有反应即坐标正确）",
+                      "en": "🎯 Test click: ({x}, {y}) (UI reacts = correct)"},
+    "log_start":    {"zh": "开始点击：坐标({x},{y}) 间隔{i:.0f}ms 模式={m} 目标={v}",
+                     "en": "Start: coords({x},{y}) interval {i:.0f}ms mode={m} target={v}"},
+    "log_finish":   {"zh": "结束（{reason}）：共投递 {n} 次，耗时 {t:.1f}s，速率 {r:.1f}/s",
+                     "en": "Finished ({reason}): Sent {n}, {t:.1f}s, rate {r:.1f}/s"},
+    "reason_target": {"zh": "达到目标自动停止", "en": "Target reached"},
+    "reason_max":    {"zh": "达到最长运行时间(60分钟)", "en": "Max 60min reached"},
+    "reason_flag":   {"zh": "检测到 stop.flag", "en": "stop.flag found"},
+    "reason_manual": {"zh": "手动/热键/鼠标移动停止", "en": "Manual·hotkey·mouse"},
+    "log_hotkey":   {"zh": "▶ 收到停止热键（⌘Cmd+Shift+X / F9），正在停止",
+                     "en": "▶ Stop hotkey (⌘Cmd+Shift+X / F9) — stopping"},
+    # ---- 报警框 ----
+    "alert_notice": {"zh": "提示", "en": "Notice"},
+    "msg_already":  {"zh": "已经在运行中，请先停止", "en": "Already running — please stop first"},
+    "alert_error":  {"zh": "错误", "en": "Error"},
+    "msg_noquartz": {"zh": "缺少 Quartz(pyobjc)。请先安装 pyobjc-framework-Quartz",
+                     "en": "Quartz missing — install pyobjc-framework-Quartz"},
+    "alert_perm":   {"zh": "没有辅助功能权限", "en": "Accessibility permission needed"},
+    "msg_perm":     {"zh": "点击事件无法送达（会被系统静默丢弃）。\n请到 系统设置→隐私与安全性→辅助功能 勾选 AutoClicker，然后重新启动程序。",
+                     "en": "Clicks are dropped silently without permission.\nEnable: System Settings → Privacy & Security → Accessibility → AutoClicker, then relaunch."},
+    "alert_bad":    {"zh": "参数错误", "en": "Bad input"},
+    "msg_coordnum": {"zh": "坐标必须是数字", "en": "Coordinates must be numbers"},
+    "err_interval": {"zh": "间隔不能为负数", "en": "Interval must be ≥ 0"},
+    "err_value":    {"zh": "时长/次数必须大于0", "en": "Duration or count must be > 0"},
+    "err_duration": {"zh": "时长不能超过 {n} 分钟（防呆上限，防止锁死电脑）",
+                     "en": "Max {n} min (safety cap)"},
+    "err_count":    {"zh": "次数不能超过 {n:,}（防呆上限）", "en": "Max {n:,} clicks (safety cap)"},
+    # ---- 权限检测 ----
+    "log_noquartz": {"zh": "⚠️ 当前环境缺少 Quartz，点击无法生效。",
+                     "en": "⚠️ Quartz missing — clicks won't work"},
+    "log_perm_ok":  {"zh": "✅ 辅助功能权限正常，点击事件可送达。",
+                     "en": "✅ Accessibility OK — clicks delivered"},
+    "log_perm_no":  {"zh": "⚠️ 缺少辅助功能权限！点击事件将被系统静默丢弃（点了没反应）。",
+                     "en": "⚠️ Accessibility permission missing! Clicks will be silently dropped."},
+    "alert_perm2":  {"zh": "需要辅助功能授权", "en": "Accessibility authorization needed"},
+    "msg_perm2":    {"zh": "AutoClicker 需要『辅助功能』权限才能发送鼠标点击。\n\n"
+                           "即将打开系统设置 → 隐私与安全性 → 辅助功能。\n"
+                           "请在列表中勾选 AutoClicker，然后关闭设置、重新启动本程序。",
+                     "en": "AutoClicker needs Accessibility permission to send clicks.\n\n"
+                           "Opening System Settings → Privacy & Security → Accessibility.\n"
+                           "Check AutoClicker in the list, then close Settings and relaunch."},
+    # ---- 坐标保存 ----
+    "btn_save":     {"zh": "💾 保存", "en": "💾 Save"},
+    "field_name":   {"zh": "名称 Name", "en": "Name 名称"},
+    "ph_saved":     {"zh": "— 已保存坐标 —", "en": "— Saved —"},
+    "tip_saved":    {"zh": "命名后保存当前坐标，可从下拉直接载入",
+                     "en": "Name & save current coords, load from dropdown"},
+    "log_saved":    {"zh": "💾 已保存坐标『{name}』：({x}, {y})",
+                     "en": "💾 Saved '{name}': ({x}, {y})"},
+    "log_load":     {"zh": "📂 载入坐标『{name}』：({x}, {y})",
+                     "en": "📂 Loaded '{name}': ({x}, {y})"},
+    "err_noname":   {"zh": "请输入坐标名称", "en": "Enter a coordinate name"},
+    "err_coordnum": {"zh": "坐标格式无效，请输入整数", "en": "Invalid coordinates, enter integers"},
+    "alert_saved":  {"zh": "坐标保存", "en": "Save coordinates"},
+    # ---- 版本号 + 关于 ----
+    "btn_about":    {"zh": "关于", "en": "About"},
+    "alert_about":  {"zh": "关于 AutoClicker", "en": "About AutoClicker"},
+    "msg_about":    {"zh": "macOS 自动点击器（AppKit 原生 UI + Quartz CGEvent）\n"
+                           "版本 v{n}\n\n"
+                           "GitHub：{url}\n\n"
+                           "版权：\n"
+                           "{c1}\n{c2}\n{c3}",
+                     "en": "macOS Auto Clicker (AppKit native UI + Quartz CGEvent)\n"
+                           "Version v{n}\n\n"
+                           "GitHub: {url}\n\n"
+                           "Copyright:\n"
+                           "{c1}\n{c2}\n{c3}"},
+    "btn_openrepo": {"zh": "打开仓库", "en": "Open Repo"},
+    "btn_close":    {"zh": "关闭", "en": "Close"},
+}
+
+
+def T(key, **kw):
+    """取当前语言文本；带占位符时格式化。"""
+    s = I18N[key][current_lang]
+    return s.format(**kw) if kw else s
+
 
 # ======================= 点击控制核心 =======================
 class ClickWorker:
@@ -90,6 +253,8 @@ class ClickWorker:
         self.mode = mode            # "duration" 或 "count"
         self.value = value
         self.stop_event = threading.Event()
+        self._paused = threading.Event()
+        self._paused.clear()
         self.count = 0
         self.start_time = 0.0
         self.running = False
@@ -99,6 +264,13 @@ class ClickWorker:
 
     def request_stop(self):
         self.stop_event.set()
+
+    def pause(self):
+        """暂停点击（不终止，计数保留，可 resume 恢复）。"""
+        self._paused.set()
+
+    def resume(self):
+        self._paused.clear()
 
     def add_log(self, text):
         with self._lock:
@@ -126,27 +298,32 @@ class ClickWorker:
 
     def _run(self):
         self.start_time = time.time()
-        self.add_log(f"开始点击：坐标({self.x},{self.y}) 间隔{self.interval*1000:.0f}ms "
-                     f"模式={self.mode} 目标={self.value}")
+        self.add_log(T("log_start", x=self.x, y=self.y, i=self.interval * 1000,
+                       m=self.mode, v=self.value))
         reason = ""
         while not self.stop_event.is_set():
+            # 暂停态：不投递、不计数，等 resume 或 stop（暂停期间鼠标自由，可操作窗口）
+            while self._paused.is_set() and not self.stop_event.is_set():
+                time.sleep(0.02)
+            if self.stop_event.is_set():
+                break
             # 逃生机制①：硬性时长上限（防呆，杜绝超长锁死）
             if time.time() - self.start_time >= MAX_RUNTIME_SEC:
-                reason = "达到最长运行时间(60分钟)，已强制停止"
+                reason = T("reason_max")
                 break
             # 逃生机制②：stop.flag 文件兜底（另一个终端 touch 即停）
             if os.path.exists(STOP_FLAG):
-                reason = "检测到 stop.flag 文件，已停止"
+                reason = T("reason_flag")
                 break
 
             mouse_click(self.x, self.y)
             self.count += 1
 
             if self.mode == "count" and self.count >= self.value:
-                reason = "达到目标自动停止"
+                reason = T("reason_target")
                 break
             if self.mode == "duration" and (time.time() - self.start_time) >= self.value:
-                reason = "达到目标自动停止"
+                reason = T("reason_target")
                 break
 
             if self.interval > 0:
@@ -160,11 +337,11 @@ class ClickWorker:
 
         elapsed = time.time() - self.start_time
         if not reason:
-            reason = "手动/热键/鼠标移动停止"
+            reason = T("reason_manual")
         self.finished_reason = reason
         self.running = False
-        self.add_log(f"结束（{reason}）：共投递 {self.count} 次，"
-                     f"耗时 {elapsed:.1f}s，投递速率 {self.count/elapsed:.1f} 次/秒")
+        self.add_log(T("log_finish", reason=reason, n=self.count,
+                       t=elapsed, r=self.count / elapsed))
 
 
 # ======================= 全局热键监听 =======================
@@ -233,7 +410,7 @@ class HotkeyListener:
     def _trigger_stop(self):
         w = self.get_worker()
         if w is not None:
-            w.add_log("▶ 收到停止热键（⌘Cmd+Shift+X / F9），正在停止")
+            w.add_log(T("log_hotkey"))
             w.request_stop()
 
 
@@ -242,13 +419,24 @@ class AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, notification):
         self.worker = None
         self.log_view = None
+        self._beep_snd = None   # 倒计时"滴"音效缓存实例
+        # ---- 鼠标晃动打断状态机初始状态 ----
+        self._int_state = "idle"            # idle | paused_wait | dialog
+        self._last_move_ts = 0.0
+        self._swing_count = 0
+        self._swing_times = collections.deque()
+        self._axis_accum = {"x": 0.0, "y": 0.0}
+        self._axis_dir = {"x": 0, "y": 0}
+        self._prev_vertex = None
+        self._last_pos = None
+        self._mouse_mon = None
         self.build_ui()
         # 全局热键
         HotkeyListener(lambda: self.worker).start()
         # 定时刷新 UI
         NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.3, self, objc.selector(self.refresh_), None, True)
-        self.add_log("就绪。")
+        self.add_log(T("log_ready"))
         self.check_accessibility()
         # 逃生通道③：真实鼠标移动即停（键盘被游戏抢走时，动一下鼠标就能夺回控制权）
         try:
@@ -256,35 +444,174 @@ class AppDelegate(NSObject):
                 NSEventMaskMouseMoved, self._on_mouse_moved)
         except Exception:
             self._mouse_mon = None
-        self.add_log("停止方式：动一下鼠标 / ⌘Cmd+Shift+X / F9 / 停止按钮 / 最长60分钟自动停")
+        self.add_log(T("log_stopways"))
+
+    def applicationShouldTerminateAfterLastWindowClosed_(self, sender):
+        """关闭主窗口即退出整个程序，避免后台残进程导致下次启动失效。"""
+        try:
+            if self.worker is not None:
+                self.worker.request_stop()
+        except Exception:
+            pass
+        try:
+            if self._mouse_mon is not None:
+                NSEvent.removeMonitor_(self._mouse_mon)
+                self._mouse_mon = None
+        except Exception:
+            pass
+        return True
+
+    def windowWillClose_(self, notification):
+        """窗口关闭兜底：直接请求退出整个 app，不依赖单一 delegate 判定。"""
+        try:
+            if self.worker is not None:
+                self.worker.request_stop()
+        except Exception:
+            pass
+        try:
+            if self._mouse_mon is not None:
+                NSEvent.removeMonitor_(self._mouse_mon)
+                self._mouse_mon = None
+        except Exception:
+            pass
+        NSApplication.sharedApplication().terminate_(None)
 
     @objc.python_method
     def _on_mouse_moved(self, event):
+        """鼠标移动检测状态机：
+        idle →(移动) paused_wait →(2秒内≥3次晃动) dialog
+        paused_wait →(鼠标停止0.5秒无晃动) 自动恢复 idle
+        dialog → 用户选 继续(恢复) / 中断(停止)，死等，不再自动恢复。
+        运行中才响应；暂停后鼠标归还用户，可直接划去窗口点按钮。"""
         w = self.worker
-        if w is not None and w.running:
-            w.add_log("🖱 检测到真实鼠标移动，已自动停止（想继续可重新点『开始』）")
+        if w is None or not w.running:
+            return
+        now = time.time()
+        self._last_move_ts = now
+
+        if self._int_state == "idle":
+            # 运行中检测到鼠标移动 → 立即暂停（先暂停再测，解掉游戏拉扯）
+            w.pause()
+            self._int_state = "paused_wait"
+            self._swing_count = 0
+            self._swing_times = collections.deque()
+            self._axis_accum = {"x": 0.0, "y": 0.0}
+            self._axis_dir = {"x": 0, "y": 0}
+            self._prev_vertex = None
+            w.add_log(T("log_pause"))
+            return
+
+        if self._int_state == "paused_wait":
+            self._detect_swing(event, now)
+            return
+
+        # dialog 态：只更新时间戳，等待用户选择（弹窗内不再做检测）
+
+    @objc.python_method
+    def _detect_swing(self, event, now):
+        """主导轴方向反转 → 顶点；相邻顶点距离≥SWING_MIN_DIST → 一次晃动；
+        2 秒窗口内累计 SWING_REQUIRED 次 → 打断性晃动，进入弹窗。
+        用绝对坐标（暂停后鼠标自由，绝对位移可靠；全局 monitor 的 delta 常为 0）。"""
+        try:
+            p = NSEvent.mouseLocation()
+            x, y = p.x, p.y
+        except Exception:
+            return
+        if self._last_pos is not None:
+            dx = x - self._last_pos[0]
+            dy = y - self._last_pos[1]
+            if abs(dx) >= abs(dy):
+                axis, val = "x", dx
+            else:
+                axis, val = "y", dy
+            self._axis_accum[axis] += val
+            cur_sign = 1 if self._axis_accum[axis] > 0 else (-1 if self._axis_accum[axis] < 0 else 0)
+            prev_sign = self._axis_dir[axis]
+            if cur_sign != 0 and prev_sign != 0 and cur_sign != prev_sign:
+                # 到达方向反转顶点
+                if self._prev_vertex is not None:
+                    d = ((x - self._prev_vertex[0]) ** 2 +
+                         (y - self._prev_vertex[1]) ** 2) ** 0.5
+                    if d >= SWING_MIN_DIST:
+                        self._swing_count += 1
+                        self._swing_times.append(now)
+                        while self._swing_times and now - self._swing_times[0] > SWING_WINDOW:
+                            self._swing_times.popleft()
+                        w = self.worker
+                        if w is not None:
+                            w.add_log(T("log_swing_count", n=len(self._swing_times)))
+                        if len(self._swing_times) >= SWING_REQUIRED:
+                            self._enter_dialog()
+                            return
+                self._prev_vertex = (x, y)
+            if cur_sign != 0:
+                self._axis_dir[axis] = cur_sign
+        self._last_pos = (x, y)
+
+    @objc.python_method
+    def _enter_dialog(self):
+        """已暂停；弹模态框死等用户选 继续/中断（不再自动恢复）。"""
+        self._int_state = "dialog"
+        w = self.worker
+        if w is None:
+            self._int_state = "idle"
+            return
+        w.add_log(T("log_swing"))
+        choice = self.show_alert_choice(T("alert_pause"), T("msg_swing"),
+                                        T("btn_continue"), T("btn_stop"))
+        if choice == "continue":
+            w.resume()
+            self._int_state = "idle"
+            w.add_log(T("log_resumed"))
+        else:
             w.request_stop()
+            self._int_state = "idle"
+            w.add_log(T("log_stopped_swing"))
+
+    @objc.python_method
+    def _auto_resume(self):
+        """鼠标停止 SWING_IDLE_SEC 秒且未触发晃动 → 自动恢复原流程。"""
+        if self._int_state != "paused_wait":
+            return
+        w = self.worker
+        if w is None or not w.running:
+            self._int_state = "idle"
+            return
+        if len(self._swing_times) >= SWING_REQUIRED:
+            return  # 已满足晃动，交给 _enter_dialog
+        w.resume()
+        self._int_state = "idle"
+        w.add_log(T("log_autoresume"))
+
+    @objc.python_method
+    def show_alert_choice(self, title, msg, btn_continue, btn_stop):
+        """模态对话框：两个按钮，死等用户选择。返回 'continue' 或 'stop'。"""
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(title)
+        alert.setInformativeText_(msg)
+        alert.addButtonWithTitle_(btn_continue)
+        alert.addButtonWithTitle_(btn_stop)
+        try:
+            ret = alert.runModal()
+            return "continue" if ret == NSAlertFirstButtonReturn else "stop"
+        except Exception:
+            return "stop"
 
     @objc.python_method
     def check_accessibility(self):
         """检测辅助功能权限：无权限时 CGEventPost 会静默丢弃事件（表现为点了没反应）。"""
         if not HAVE_QUARTZ:
-            self.add_log("⚠️ 当前环境缺少 Quartz，点击无法生效。")
+            self.add_log(T("log_noquartz"))
             return
         try:
             ok = CGPreflightPostEventAccess()
         except Exception:
             ok = False
         if ok:
-            self.add_log("✅ 辅助功能权限正常，点击事件可送达。")
+            self.add_log(T("log_perm_ok"))
             return
-        self.add_log("⚠️ 缺少辅助功能权限！点击事件将被系统静默丢弃（点了没反应）。")
-        self.show_alert(
-            "需要辅助功能授权",
-            "AutoClicker 需要『辅助功能』权限才能发送鼠标点击。\n\n"
-            "即将打开系统设置 → 隐私与安全性 → 辅助功能。\n"
-            "请在列表中勾选 AutoClicker，然后关闭设置、重新启动本程序。",
-        )
+        self.add_log(T("log_perm_no"))
+        self.show_alert(T("alert_perm2"), T("msg_perm2"))
         try:
             NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"))
@@ -301,85 +628,129 @@ class AppDelegate(NSObject):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, 600, 680),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-            NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable,
+            NSWindowStyleMaskMiniaturizable,
             NSBackingStoreBuffered, False)
-        self.window.setTitle_("AutoClicker - 自动点击器")
+        self.window.setTitle_("AutoClicker - 自动点击器 / Auto Clicker")
         self.window.center()
         self.window.setReleasedWhenClosed_(False)
+        self.window.setDelegate_(self)   # 关窗即退出的兜底回调
         content = self.window.contentView()
+        self._ui_keys = []          # (控件, i18n key)：语言切换时统一刷新
 
-        # ---------- 大标题 ----------
-        title = NSTextField.labelWithString_("AutoClicker")
+        def keep(ctrl, key):
+            content.addSubview_(ctrl)
+            if key:
+                self._ui_keys.append((ctrl, key))
+            return ctrl
+
+        # ---------- 大标题 + 语言切换 ----------
+        title = NSTextField.labelWithString_(T("app_title"))
         title.setFont_(NSFont.boldSystemFontOfSize_(22))
         title.setTextColor_(NSColor.controlAccentColor())
         title.setFrame_(NSMakeRect(16, 634, 300, 30))
-        content.addSubview_(title)
-        sub = NSTextField.labelWithString_("macOS 自动点击器 · 坐标拾取 · 全局热键停止")
+        keep(title, "app_title")
+        sub = NSTextField.labelWithString_(T("app_sub"))
         sub.setFont_(NSFont.systemFontOfSize_(12))
         sub.setTextColor_(NSColor.secondaryLabelColor())
         sub.setFrame_(NSMakeRect(16, 610, 420, 18))
-        content.addSubview_(sub)
+        keep(sub, "app_sub")
+        # 版本号（副标题右侧，mono 等宽）
+        self.lbl_version = NSTextField.labelWithString_("v" + VERSION)
+        self.lbl_version.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 4))
+        self.lbl_version.setTextColor_(NSColor.tertiaryLabelColor())
+        self.lbl_version.setAlignment_(NSTextAlignmentRight)
+        self.lbl_version.setFrame_(NSMakeRect(440, 610, 144, 18))
+        content.addSubview_(self.lbl_version)
+        # 关于按钮（右上角，语言下拉左侧）
+        self.btn_about = self._button(T("btn_about"), 392, 636, 54, 26, self.about_)
+        keep(self.btn_about, "btn_about")
+        # 语言下拉（右上角）：LANGUAGES 里新增即自动可切换
+        self.popup_lang = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(452, 636, 132, 26), False)
+        self.popup_lang.addItemsWithTitles_(LANGUAGES)
+        self.popup_lang.selectItemAtIndex_(0)   # 默认中文
+        self.popup_lang.menu().setAutoenablesItems_(False)   # 避免菜单项被自动置灰
+        self.popup_lang.setTarget_(self)
+        self.popup_lang.setAction_(objc.selector(self.changeLang_))
+        content.addSubview_(self.popup_lang)
         content.addSubview_(self._separator(16, 596, 568))
 
         # ---------- ① 坐标拾取 ----------
-        content.addSubview_(self._group_title("①  坐标拾取", 16, 570))
-        content.addSubview_(self._label("坐标 X:", 16, 540, 54, 24))
-        self.field_x = self._input("2852", 72, 540, 80, 26)
-        content.addSubview_(self.field_x)
-        content.addSubview_(self._label("Y:", 168, 540, 22, 24))
-        self.field_y = self._input("545", 192, 540, 80, 26)
-        content.addSubview_(self.field_y)
-        content.addSubview_(self._label("间隔(ms):", 292, 540, 62, 24))
-        self.field_interval = self._input("1", 356, 540, 80, 26)
-        content.addSubview_(self.field_interval)
-        content.addSubview_(self._label("越小越快 · 游戏约50次/秒有效", 448, 542, 150, 22, small=True))
+        keep(self._group_title(T("grp1"), 16, 560), "grp1")
+        keep(self._label(T("lbl_x"), 16, 522, 78, 24), "lbl_x")
+        self.field_x = self._input("2852", 96, 522, 62, 26)
+        keep(self.field_x, None)
+        keep(self._label(T("lbl_y"), 164, 522, 42, 24), "lbl_y")
+        self.field_y = self._input("545", 208, 522, 62, 26)
+        keep(self.field_y, None)
+        keep(self._label(T("lbl_int"), 276, 522, 92, 24), "lbl_int")
+        self.field_interval = self._input("1", 370, 522, 62, 26)
+        keep(self.field_interval, None)
+        keep(self._multiline_label(T("tip_interval"), 438, 514, 154, 40, font_size=9), "tip_interval")
 
-        self.btn_pick = self._button("📌 拾取坐标 (5s)", 16, 498, 176, 34, self.pick_)
-        self.btn_pick.setToolTip_("点击后 5 秒倒计时，结束时读取鼠标位置并填入坐标框")
-        content.addSubview_(self.btn_pick)
-        self.btn_test_pos = self._button("🎯 测试坐标", 200, 498, 140, 34, self.testPos_)
-        self.btn_test_pos.setToolTip_("在坐标框当前位置执行一次点击，校验坐标是否准确")
-        content.addSubview_(self.btn_test_pos)
-        self.lbl_pick = self._label("倒计时：就绪（点后把鼠标移到目标点）", 350, 498, 248, 26, small=True)
-        content.addSubview_(self.lbl_pick)
-        content.addSubview_(self._separator(16, 484, 568))
+        self.btn_pick = self._button(T("btn_pick"), 16, 492, 176, 34, self.pick_)
+        self.btn_pick.setToolTip_(T("tip_pick_tt"))
+        keep(self.btn_pick, "btn_pick")
+        self.btn_test_pos = self._button(T("btn_test"), 200, 492, 140, 34, self.testPos_)
+        self.btn_test_pos.setToolTip_(T("tip_test_tt"))
+        keep(self.btn_test_pos, "btn_test")
+        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 350, 487, 240, 40, font_size=10)
+        keep(self.lbl_pick, "lbl_pick_ready")
+
+        # ---- 坐标保存行：名称 + 保存 + 已保存下拉（载入） ----
+        self.field_saved_name = self._input("", 16, 452, 150, 26)
+        self.field_saved_name.setPlaceholderString_(T("field_name"))
+        keep(self.field_saved_name, None)
+        self.btn_save = self._button(T("btn_save"), 172, 452, 90, 26, self.saveCoord_)
+        keep(self.btn_save, "btn_save")
+        self.popup_saved = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(268, 452, 150, 26), False)
+        self.popup_saved.addItemWithTitle_(T("ph_saved"))
+        self.popup_saved.menu().setAutoenablesItems_(False)
+        self.popup_saved.setTarget_(self)
+        self.popup_saved.setAction_(objc.selector(self.coordsChanged_))
+        content.addSubview_(self.popup_saved)
+        keep(self._multiline_label(T("tip_saved"), 424, 444, 160, 32, font_size=9), "tip_saved")
+        content.addSubview_(self._separator(16, 440, 568))
+        self._reload_saved_list()   # 载入持久化坐标
 
         # ---------- ② 运行设置 ----------
-        content.addSubview_(self._group_title("②  运行设置", 16, 458))
-        content.addSubview_(self._label("运行模式:", 16, 424, 72, 24))
+        keep(self._group_title(T("grp2"), 16, 416), "grp2")
+        keep(self._label(T("lbl_mode"), 16, 384, 96, 24), "lbl_mode")
         self.popup_mode = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(92, 424, 126, 26), False)
-        self.popup_mode.addItemsWithTitles_(["按时长(秒)", "按次数"])
+            NSMakeRect(116, 384, 128, 26), False)
+        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count")])
+        self.popup_mode.menu().setAutoenablesItems_(False)   # 避免菜单项被自动置灰
         content.addSubview_(self.popup_mode)
-        content.addSubview_(self._label("数值:", 236, 424, 34, 24))
-        self.field_value = self._input("60", 272, 424, 84, 26)
-        content.addSubview_(self.field_value)
-        content.addSubview_(self._label("停止：⌘Cmd+Shift+X / 停止按钮 / 自动到点", 372, 424, 220, 22, small=True))
-        content.addSubview_(self._separator(16, 410, 568))
+        keep(self._label(T("lbl_value"), 252, 384, 82, 24), "lbl_value")
+        self.field_value = self._input("60", 336, 384, 70, 26)
+        keep(self.field_value, None)
+        keep(self._multiline_label(T("tip_stop"), 410, 374, 182, 40, font_size=9), "tip_stop")
+        content.addSubview_(self._separator(16, 370, 568))
 
         # ---------- ③ 控制 ----------
-        content.addSubview_(self._group_title("③  控制", 16, 384))
-        self.btn_start = self._button("▶ 开始", 16, 344, 132, 36, self.start_)
-        content.addSubview_(self.btn_start)
-        self.btn_test = self._button("测试 10 秒", 158, 344, 132, 36, self.test_)
-        content.addSubview_(self.btn_test)
-        self.btn_stop = self._button("■ 停止", 300, 344, 132, 36, self.stop_)
+        keep(self._group_title(T("grp3"), 16, 346), "grp3")
+        self.btn_start = self._button(T("btn_start"), 16, 302, 140, 34, self.start_)
+        keep(self.btn_start, "btn_start")
+        self.btn_test = self._button(T("btn_test10"), 166, 302, 148, 34, self.test_)
+        keep(self.btn_test, "btn_test10")
+        self.btn_stop = self._button(T("btn_stop"), 324, 302, 140, 34, self.stop_)
         self.btn_stop.setEnabled_(False)
-        content.addSubview_(self.btn_stop)
+        keep(self.btn_stop, "btn_stop")
 
-        self.lbl_status = self._label("状态：空闲", 16, 302, 170, 22)
+        self.lbl_status = self._label(T("status_idle"), 16, 264, 180, 22)
         content.addSubview_(self.lbl_status)
-        self.lbl_count = self._label("已投递：0 次", 200, 302, 150, 22)
+        self.lbl_count = self._label(T("lbl_count", n=0), 204, 264, 150, 22)
         content.addSubview_(self.lbl_count)
-        self.lbl_rate = self._label("速率：0.0 次/秒", 360, 302, 220, 22)
+        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 264, 220, 22)
         content.addSubview_(self.lbl_rate)
 
         # ---------- 日志 ----------
-        content.addSubview_(self._label("运行日志", 16, 278, 200, 20, bold=True))
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 260))
+        keep(self._label(T("log_title"), 16, 238, 200, 20, bold=True), "log_title")
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 220))
         scroll.setHasVerticalScroller_(True)
         scroll.setAutohidesScrollers_(True)
-        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 260))
+        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 220))
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
         # 系统动态颜色：自动跟随深色/浅色模式（夜间→黑底白字，浅色→白底黑字）
@@ -390,6 +761,40 @@ class AppDelegate(NSObject):
 
         self.window.makeKeyAndOrderFront_(None)
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+
+    def changeLang_(self, sender):
+        """语言下拉切换：刷新所有静态控件 + 模式项 + 动态状态。
+        注意：不能加 @objc.python_method（否则无法作为 ObjC action 被分发）。"""
+        global current_lang
+        idx = sender.indexOfSelectedItem()
+        if 0 <= idx < len(LANG_KEYS):
+            current_lang = LANG_KEYS[idx]
+            self._apply_lang()
+
+    @objc.python_method
+    def _apply_lang(self):
+        for ctrl, key in self._ui_keys:
+            ctrl.setStringValue_(T(key))
+        # 运行模式下拉项
+        self.popup_mode.removeAllItems()
+        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count")])
+        # 坐标保存：占位项 + 名称输入占位
+        self.field_saved_name.setPlaceholderString_(T("field_name"))
+        if hasattr(self, "popup_saved") and self._saved_coords is not None:
+            self._reload_saved_list()
+        # 按钮 tooltip
+        self.btn_pick.setToolTip_(T("tip_pick_tt"))
+        self.btn_test_pos.setToolTip_(T("tip_test_tt"))
+        # 动态状态（运行中/空闲、投递数、速率）
+        running = self.worker is not None and self.worker.running
+        self.lbl_status.setStringValue_(T("status_run") if running else T("status_idle"))
+        w = self.worker
+        if w is not None:
+            self.lbl_count.setStringValue_(T("lbl_count", n=w.count))
+            self.lbl_rate.setStringValue_(T("lbl_rate", r=w.rate))
+        else:
+            self.lbl_count.setStringValue_(T("lbl_count", n=0))
+            self.lbl_rate.setStringValue_(T("lbl_rate", r=0.0))
 
     # ---------- 辅助构建 ----------
     @objc.python_method
@@ -415,6 +820,23 @@ class AppDelegate(NSObject):
         elif small:
             lbl.setFont_(NSFont.systemFontOfSize_(11))
             lbl.setTextColor_(NSColor.secondaryLabelColor())
+        return lbl
+
+    @objc.python_method
+    def _multiline_label(self, text, x, y, w, h, font_size=11, bold=False, color=None):
+        """说明文字用：自动按单词换行（word wrapping），多行显示，不再截断/溢出界面。"""
+        lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(x, y, w, h))
+        lbl.setStringValue_(text)
+        lbl.setEditable_(False)
+        lbl.setSelectable_(False)
+        lbl.setBordered_(False)
+        lbl.setBezeled_(False)
+        lbl.setDrawsBackground_(False)
+        lbl.setLineBreakMode_(NSLineBreakByWordWrapping)
+        lbl.setUsesSingleLineMode_(False)
+        lbl.cell().setWraps_(True)
+        lbl.setFont_(NSFont.boldSystemFontOfSize_(font_size) if bold else NSFont.systemFontOfSize_(font_size))
+        lbl.setTextColor_(color if color is not None else NSColor.secondaryLabelColor())
         return lbl
 
     @objc.python_method
@@ -458,15 +880,15 @@ class AppDelegate(NSObject):
         y = int(self.field_y.stringValue())
         interval = float(self.field_interval.stringValue())
         if interval < 0:
-            raise ValueError("间隔不能为负数")
+            raise ValueError(T("err_interval"))
         mode = "duration" if self.popup_mode.indexOfSelectedItem() == 0 else "count"
         value = int(self.field_value.stringValue())
         if value <= 0:
-            raise ValueError("时长/次数必须大于0")
+            raise ValueError(T("err_value"))
         if mode == "duration" and value > MAX_RUNTIME_SEC:
-            raise ValueError(f"时长不能超过 {MAX_RUNTIME_SEC//60} 分钟（防呆上限，防止锁死电脑）")
+            raise ValueError(T("err_duration", n=MAX_RUNTIME_SEC // 60))
         if mode == "count" and value > MAX_COUNT:
-            raise ValueError(f"次数不能超过 {MAX_COUNT:,}（防呆上限）")
+            raise ValueError(T("err_count", n=MAX_COUNT))
         return x, y, interval, mode, value
 
     def start_(self, sender):
@@ -476,31 +898,64 @@ class AppDelegate(NSObject):
         self._start("duration", 10)
 
     # ---------- 坐标拾取 ----------
+    @objc.python_method
+    def _beep(self):
+        """倒计时进行中：每秒一声短促'滴'（Tink 音效，不依赖系统 alert 声音设置）。"""
+        try:
+            if self._beep_snd is None:
+                self._beep_snd = NSSound.soundNamed_("Tink") or NSSound.soundNamed_("Pop")
+            snd = self._beep_snd
+            if snd is not None:
+                try:
+                    snd.stop()
+                except Exception:
+                    pass
+                snd.play()
+            else:
+                NSSound.beep()
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _chime(self):
+        """倒计时结束：一声'叮'（系统 Glass 音），提示时间到。"""
+        try:
+            s = NSSound.soundNamed_("Glass")
+            if s is not None:
+                s.play()
+            else:
+                NSSound.beep()
+        except Exception:
+            self._beep()
+
     def pick_(self, sender):
         """点击后开始 5 秒倒计时，到时读取鼠标位置填入坐标框。"""
         if not HAVE_QUARTZ:
-            self.show_alert("错误", "当前环境缺少 Quartz，无法读取鼠标位置。")
+            self.show_alert(T("alert_error"), T("msg_noquartz"))
             return
         self.countdown_remaining = 5
-        self.lbl_pick.setStringValue_(f"倒计时：{self.countdown_remaining}s（请把鼠标移到目标点）")
+        self.lbl_pick.setStringValue_(T("log_countdown", n=self.countdown_remaining))
         self.btn_pick.setEnabled_(False)
+        self._beep()   # 开始即响一声，提示倒计时已启动
         self.countdown_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0, self, objc.selector(self.countdown_), None, True)
 
     def countdown_(self, timer):
-        """每秒回调一次；到 0 时读取鼠标位置。"""
+        """每秒回调一次；到 0 时读取鼠标位置。每秒'滴'，结束时'叮'。"""
         self.countdown_remaining -= 1
         if self.countdown_remaining > 0:
-            self.lbl_pick.setStringValue_(f"倒计时：{self.countdown_remaining}s（请把鼠标移到目标点）")
+            self.lbl_pick.setStringValue_(T("log_countdown", n=self.countdown_remaining))
+            self._beep()   # 进行中提示
             return
         if timer is not None:
             timer.invalidate()
+        self._chime()      # 时间到提示
         x, y = self.get_mouse_pos()
         self.field_x.setStringValue_(str(x))
         self.field_y.setStringValue_(str(y))
-        self.lbl_pick.setStringValue_(f"✅ 拾取完成：({x}, {y})")
+        self.lbl_pick.setStringValue_(T("log_picked", x=x, y=y))
         self.btn_pick.setEnabled_(True)
-        self.add_log(f"📌 拾取坐标：({x}, {y})（已填入坐标框，可点『🎯测试坐标』校验）")
+        self.add_log(T("log_pickcoord", x=x, y=y))
 
     def testPos_(self, sender):
         """在坐标框的当前值位置执行一次点击，用于校验坐标准不准。"""
@@ -508,10 +963,10 @@ class AppDelegate(NSObject):
             x = int(self.field_x.stringValue())
             y = int(self.field_y.stringValue())
         except Exception:
-            self.show_alert("参数错误", "坐标必须是数字。")
+            self.show_alert(T("alert_bad"), T("msg_coordnum"))
             return
         mouse_click(x, y)
-        self.add_log(f"🎯 测试坐标点击：({x}, {y})（若弹窗/按钮有反应即坐标正确）")
+        self.add_log(T("log_testclick", x=x, y=y))
 
     @objc.python_method
     def get_mouse_pos(self):
@@ -524,27 +979,23 @@ class AppDelegate(NSObject):
     @objc.python_method
     def _start(self, mode_override, duration_override):
         if self.worker is not None and self.worker.running:
-            self.show_alert("提示", "已经在运行中，请先停止。")
+            self.show_alert(T("alert_notice"), T("msg_already"))
             return
         if not HAVE_QUARTZ:
-            self.show_alert("错误", "缺少 Quartz(pyobjc)。请先安装 pyobjc-framework-Quartz。")
+            self.show_alert(T("alert_error"), T("msg_noquartz"))
             return
         # 运行前再查一次权限，避免"点了没反应"
         if HAVE_QUARTZ:
             try:
                 if not CGPreflightPostEventAccess():
-                    self.show_alert(
-                        "没有辅助功能权限",
-                        "点击事件无法送达（会被系统静默丢弃）。\n"
-                        "请到 系统设置→隐私与安全性→辅助功能 勾选 AutoClicker，然后重新启动程序。",
-                    )
+                    self.show_alert(T("alert_perm"), T("msg_perm"))
                     return
             except Exception:
                 pass
         try:
             x, y, interval, mode, value = self._read_params()
         except Exception as e:
-            self.show_alert("参数错误", str(e))
+            self.show_alert(T("alert_bad"), str(e))
             return
         if mode_override:
             mode = mode_override
@@ -556,29 +1007,105 @@ class AppDelegate(NSObject):
         self.add_log("=" * 40)
 
     def stop_(self, sender):
+        self._int_state = "idle"   # 手动停止时退出暂停/弹窗态
         if self.worker is not None:
             self.worker.request_stop()
+
+    def saveCoord_(self, sender):
+        """保存当前坐标 + 自定义命名 → saved_coords.json（action，勿加 @objc.python_method）。"""
+        name = self.field_saved_name.stringValue().strip()
+        if not name:
+            self.show_alert(T("alert_saved"), T("err_noname"))
+            return
+        try:
+            x = int(self.field_x.stringValue())
+            y = int(self.field_y.stringValue())
+        except Exception:
+            self.show_alert(T("alert_saved"), T("err_coordnum"))
+            return
+        self._saved_coords = [c for c in self._saved_coords if c.get("name") != name]  # 同名覆盖
+        self._saved_coords.append({"name": name, "x": x, "y": y})
+        self._save_coords(self._saved_coords)
+        self._reload_saved_list()
+        self.field_saved_name.setStringValue_("")
+        self.add_log(T("log_saved", name=name, x=x, y=y))
+
+    def coordsChanged_(self, sender):
+        """从下拉选中已保存坐标 → 载入坐标框（action，勿加 @objc.python_method）。"""
+        idx = sender.indexOfSelectedItem()
+        if idx <= 0:
+            return
+        c = self._saved_coords[idx - 1]
+        self.field_x.setStringValue_(str(c.get("x", "")))
+        self.field_y.setStringValue_(str(c.get("y", "")))
+        self.add_log(T("log_load", name=c.get("name", ""), x=c.get("x", ""), y=c.get("y", "")))
+
+    def about_(self, sender):
+        """关于面板：版本 + GitHub 链接 + 版权三行（action，勿加 @objc.python_method）。"""
+        msg = T("msg_about", n=VERSION, url=GITHUB_URL,
+                c1=COPYRIGHT_1, c2=COPYRIGHT_2, c3=COPYRIGHT_3)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(T("alert_about"))
+        alert.setInformativeText_(msg)
+        alert.addButtonWithTitle_(T("btn_openrepo"))
+        alert.addButtonWithTitle_(T("btn_close"))
+        ret = alert.runModal()
+        if ret == NSAlertFirstButtonReturn:
+            try:
+                NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(GITHUB_URL))
+            except Exception:
+                pass
+
+    @objc.python_method
+    def _reload_saved_list(self):
+        self._saved_coords = self._load_coords()
+        self.popup_saved.removeAllItems()
+        self.popup_saved.addItemWithTitle_(T("ph_saved"))
+        for c in self._saved_coords:
+            self.popup_saved.addItemWithTitle_(
+                "{} ({}, {})".format(c.get("name", "?"), c.get("x", 0), c.get("y", 0)))
+        self.popup_saved.selectItemAtIndex_(0)
+
+    @objc.python_method
+    def _save_coords(self, coords):
+        try:
+            with open(SAVED_COORDS_PATH, "w", encoding="utf-8") as f:
+                json.dump(coords, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _load_coords(self):
+        try:
+            with open(SAVED_COORDS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
 
     @objc.python_method
     def _set_running(self, running):
         self.btn_start.setEnabled_(not running)
         self.btn_test.setEnabled_(not running)
         self.btn_stop.setEnabled_(running)
-        self.lbl_status.setStringValue_("状态：运行中" if running else "状态：空闲")
+        self.lbl_status.setStringValue_(T("status_run") if running else T("status_idle"))
 
     def refresh_(self, timer):
         w = self.worker
         if w is None:
             return
+        # 自动恢复：暂停态且鼠标停止 0.5 秒无晃动 → 恢复原流程
+        if self._int_state == "paused_wait" and time.time() - self._last_move_ts >= SWING_IDLE_SEC:
+            self._auto_resume()
         for line in w.drain_logs():
             self.add_log(line)
         if w.running:
-            self.lbl_count.setStringValue_(f"已投递：{w.count} 次")
-            self.lbl_rate.setStringValue_(f"速率：{w.rate:.1f} 次/秒")
+            self.lbl_count.setStringValue_(T("lbl_count", n=w.count))
+            self.lbl_rate.setStringValue_(T("lbl_rate", r=w.rate))
         elif self.btn_stop.isEnabled():
             self._set_running(False)
-            self.lbl_count.setStringValue_(f"已投递：{w.count} 次")
-            self.lbl_rate.setStringValue_(f"速率：{w.rate:.1f} 次/秒")
+            self.lbl_count.setStringValue_(T("lbl_count", n=w.count))
+            self.lbl_rate.setStringValue_(T("lbl_rate", r=w.rate))
             self.worker = None
 
 
