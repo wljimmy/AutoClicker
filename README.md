@@ -93,6 +93,32 @@ bash build_mac.sh
 - 平台：macOS arm64，adhoc 签名
 - 用 `--noconfirm` 自动覆盖旧包，配合固定 Bundle ID 降低重授权频率
 
+## 一键发版（release.sh）
+
+```bash
+./release.sh 0.5.0                # 完整发版
+./release.sh 0.5.0 --local-only   # 只本地打包归档，不推送
+./release.sh 0.5.0 --dry-run      # 演练，不改任何文件
+```
+
+一条命令依次完成 9 步：**归档旧版 → 改写三处版本号（VERSION / spec / README）→ PyInstaller 打包 → 重签并校验 → 归档 `releases/v<版本>` → 打 zip → 生成 DMG（内含安装说明）→ 更新 releases 根目录最新版 → 写 RELEASE_NOTES/CHANGELOG → commit → push → tag → GitHub Release 上传 zip+dmg**。
+
+- 有正式开发者证书时：`CODESIGN_IDENTITY="Developer ID Application: xxx (TEAMID)" ./release.sh 0.5.0`
+- 不填 `CODESIGN_IDENTITY` 则用 adhoc（`-`）
+- 发布物（.app/zip/dmg）不入 git，只入本地 `releases/` 归档；git 里保留源码与文本记录
+
+## 首次打开被 Gatekeeper 拦截？（分发必看）
+
+**原因**：本 App 用 adhoc 签名、且未做 Apple 公证。别人从网上下载后系统会打 quarantine 标记，首次打开提示"无法验证开发者"——这是苹果的强制机制，不是病毒，也没有免费的绕过方案。
+
+| 方案 | 做法 | 效果 | 成本 |
+|---|---|---|---|
+| 右键打开 | 在「应用程序」里 Control/右键点 app → 打开 → 弹窗再点「打开」 | 一次性，之后正常双击 | 0 |
+| 终端去标记 | `xattr -d com.apple.quarantine /Applications/AutoClicker.app` | 同上 | 0 |
+| **正式签名 + 公证** | 加入 Apple Developer Program，Developer ID 签名 + `notarytool` 公证 + `stapler` 装订 | 用户双击即开，零提示 | $99/年 |
+
+DMG 内已附带「首次打开请先右键.txt」，下载者照着做即可。若要对公众大规模分发，建议走第三条。
+
 ## 版权 / License
 
 - **Bingo Studio** · wljimmy@hotmail.com

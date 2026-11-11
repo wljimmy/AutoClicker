@@ -22,7 +22,17 @@ releases/
 5. **归档顺序**：打包 → `codesign --force --deep --sign -` 重签并 `codesign -v` 校验 → `ditto` 复制（保留签名与扩展属性）→ `ditto -c -k --keepParent` 打 zip → 写 notes。
 6. **二进制不入 git**：`releases/` 已加入 `.gitignore`；源码与文本记录入 git，App/zip 走本地归档或 GitHub Release。
 
-## 新增一个版本的命令模板
+## 新增一个版本
+
+**推荐：用一键发版脚本，上面所有步骤它全包了**
+
+```bash
+./release.sh 0.5.0              # 完整发版（含 push + tag + GitHub Release）
+./release.sh 0.5.0 --local-only # 只本地归档，不推送
+./release.sh 0.5.0 --dry-run    # 演练
+```
+
+手动操作的话，按下面的模板走。
 
 ```bash
 cd "/Users/wanglin/工作_本地/豆包工作/自动点击器"
