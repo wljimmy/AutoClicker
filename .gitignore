@@ -7,3 +7,6 @@ stop.flag
 saved_coords.json
 assets/AppIcon.iconset/
 assets/app_icon_2048.png
+# 发布物（.app / .zip）体积大，不入 git；仅规范说明入库
+releases/*
+!releases/README.md
