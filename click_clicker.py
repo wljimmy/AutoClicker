@@ -81,7 +81,7 @@ MAX_RUNTIME_SEC = 3600        # 硬性最长运行 60 分钟，杜绝超长任�
 MAX_COUNT = 1_000_000         # 单次最多点击次数上限
 STOP_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop.flag")
 
-VERSION = "0.4.0-alpha"   # 版本号：UI 副标题 + 关于面板展示
+VERSION = "0.5.0"   # 版本号：UI 副标题 + 关于面板展示
 GITHUB_URL = "https://github.com/wljimmy/AutoClicker"
 # 版权三行（verbatim，用户锁定）
 COPYRIGHT_1 = "Bingo Studio"
