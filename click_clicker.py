@@ -88,6 +88,7 @@ COPYRIGHT_1 = "Bingo Studio"
 COPYRIGHT_2 = "wljimmy@hotmail.com"
 COPYRIGHT_3 = "本项目是由wljimmy使用doubao AI完成"
 SAVED_COORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_coords.json")
+MULTI_POINTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multi_points.json")
 
 # ---- 鼠标晃动打断检测（打断性晃动 = 2 秒内 ≥3 次来回，每段 ≥200px） ----
 SWING_MIN_DIST = 200.0        # 相邻两个方向顶点之间最小距离(px)，>= 才算一次晃动段
@@ -122,6 +123,30 @@ I18N = {
                     "en": "click once at coords"},
     "lbl_pick_ready": {"zh": "倒计时：就绪（点后把鼠标移到目标点）",
                        "en": "Countdown: Ready (move mouse to target)"},
+    # ---- ④ 多点队列 / 静音 / 倒计时 ----
+    "grp4":         {"zh": "④ 多点队列", "en": "④ Multi-Point Queue"},
+    "btn_qadd":     {"zh": "➕ 加入队列", "en": "➕ Add to Queue"},
+    "btn_qdel":     {"zh": "🗑 删末项", "en": "🗑 Del Last"},
+    "btn_qclear":   {"zh": "清空", "en": "Clear"},
+    "lbl_qcount":   {"zh": "次数:", "en": "Times:"},
+    "lbl_qint":     {"zh": "间隔(ms):", "en": "Gap(ms):"},
+    "tip_queue":    {"zh": "坐标取上方 X/Y；次数=0 表示一直点；每轮按顺序点完整个队列再循环",
+                     "en": "Uses X/Y above; Times=0 = forever; one pass = one round"},
+    "que_empty":    {"zh": "队列为空。格式：序号 (X, Y) ×次数 间隔ms",
+                     "en": "Queue empty. Row: # (X, Y) ×times gap ms"},
+    "mode_queue":   {"zh": "多点队列(按时长)", "en": "Multi-Point (by duration)"},
+    "chk_mute":     {"zh": "静音提示音", "en": "Mute beeps"},
+    "lbl_elapsed":  {"zh": "已过 {t}", "en": "Elapsed {t}"},
+    "lbl_left":     {"zh": "剩余 {t}", "en": "Left {t}"},
+    "lbl_total":    {"zh": "总计 {t}", "en": "Total {t}"},
+    "err_queue_empty": {"zh": "多点队列为空：先拾取坐标再点『加入队列』",
+                        "en": "Queue is empty — pick a point and add it first"},
+    "log_queue_add": {"zh": "➕ 队列 #{i}：({x}, {y}) ×{n} 次，间隔 {ms}ms",
+                      "en": "➕ Queue #{i}: ({x}, {y}) ×{n}, gap {ms}ms"},
+    "log_queue_del": {"zh": "🗑 已删除队列末项", "en": "🗑 Removed last item"},
+    "log_queue_clear": {"zh": "🗑 队列已清空", "en": "🗑 Queue cleared"},
+    "log_mute":     {"zh": "🔇 提示音已静音", "en": "🔇 Beeps muted"},
+    "log_unmute":   {"zh": "🔊 提示音已恢复", "en": "🔊 Beeps on"},
     # ---- ② 运行设置 ----
     "grp2":        {"zh": "② 运行设置", "en": "② Run Settings"},
     "lbl_mode":    {"zh": "运行模式:", "en": "Mode:"},
@@ -165,10 +190,12 @@ I18N = {
                       "en": "📌 Picked: ({x}, {y}) (filled in)"},
     "log_testclick": {"zh": "🎯 测试坐标点击：({x}, {y})（若弹窗/按钮有反应即坐标正确）",
                       "en": "🎯 Test click: ({x}, {y}) (UI reacts = correct)"},
-    "log_start":    {"zh": "开始点击：坐标({x},{y}) 间隔{i:.0f}ms 模式={m} 目标={v}",
-                     "en": "Start: coords({x},{y}) interval {i:.0f}ms mode={m} target={v}"},
-    "log_finish":   {"zh": "结束（{reason}）：共投递 {n} 次，耗时 {t:.1f}s，速率 {r:.1f}/s",
-                     "en": "Finished ({reason}): Sent {n}, {t:.1f}s, rate {r:.1f}/s"},
+    "log_start":    {"zh": "▶ 开始：坐标({x},{y}) 间隔{i:.0f}ms 模式={m} 目标={v}",
+                     "en": "▶ Start: ({x},{y}) gap {i:.0f}ms mode={m} target={v}"},
+    "log_start_queue": {"zh": "▶ 开始：多点队列 {n} 个点，模式={m} 目标={v}",
+                        "en": "▶ Start: queue of {n} points, mode={m} target={v}"},
+    "log_finish":   {"zh": "■ 结束（{reason}）：共投递 {n} 次，耗时 {d}，速率 {r:.1f}/s",
+                     "en": "■ End ({reason}): sent {n}, duration {d}, rate {r:.1f}/s"},
     "reason_target": {"zh": "达到目标自动停止", "en": "Target reached"},
     "reason_max":    {"zh": "达到最长运行时间(60分钟)", "en": "Max 60min reached"},
     "reason_flag":   {"zh": "检测到 stop.flag", "en": "stop.flag found"},
@@ -242,21 +269,34 @@ def T(key, **kw):
     return s.format(**kw) if kw else s
 
 
+def fmt_hms(sec):
+    """秒 → HH:MM:SS（倒计时显示统一格式，从小时开始）。"""
+    sec = max(0, int(sec))
+    return "%02d:%02d:%02d" % (sec // 3600, (sec % 3600) // 60, sec % 60)
+
+
 # ======================= 点击控制核心 =======================
 class ClickWorker:
-    """后台点击线程：循环点击、统计、自动/手动停止。线程安全。"""
+    """后台点击线程：按 points 列表循环点击、统计、自动/手动停止。线程安全。
 
-    def __init__(self, x, y, interval_ms, mode, value):
-        self.x = x
-        self.y = y
-        self.interval = max(0.0, float(interval_ms)) / 1000.0
-        self.mode = mode            # "duration" 或 "count"
+    points: [{"x": int, "y": int, "count": int(0=无限), "interval_ms": float}]
+    mode:   "duration"（按总时长秒）| "count"（按总次数）
+    队列模式：每轮按列表顺序把每个点按其次数点完，再进入下一轮。
+    计时只统计"活跃运行时间"：暂停期间冻结，恢复后继续累加。
+    """
+
+    def __init__(self, points, mode, value):
+        self.points = list(points)
+        self.mode = mode
         self.value = value
         self.stop_event = threading.Event()
         self._paused = threading.Event()
         self._paused.clear()
         self.count = 0
+        self.rounds = 0
         self.start_time = 0.0
+        self._accum = 0.0          # 已累计的活跃秒数（不含当前段）
+        self._seg_start = 0.0
         self.running = False
         self.finished_reason = ""
         self._logs = collections.deque()
@@ -266,11 +306,23 @@ class ClickWorker:
         self.stop_event.set()
 
     def pause(self):
-        """暂停点击（不终止，计数保留，可 resume 恢复）。"""
+        """暂停点击（不终止，计数保留，可 resume）。暂停即冻结计时。"""
+        if not self._paused.is_set() and self._seg_start > 0:
+            self._accum += time.time() - self._seg_start
         self._paused.set()
 
     def resume(self):
-        self._paused.clear()
+        if self._paused.is_set():
+            self._paused.clear()
+            self._seg_start = time.time()
+
+    @property
+    def elapsed(self):
+        """活跃运行秒数（暂停冻结）。"""
+        e = self._accum
+        if self.running and not self._paused.is_set() and self._seg_start > 0:
+            e += time.time() - self._seg_start
+        return e
 
     def add_log(self, text):
         with self._lock:
@@ -284,13 +336,17 @@ class ClickWorker:
 
     @property
     def rate(self):
-        if not self.running or self.start_time <= 0:
+        e = self.elapsed
+        if not self.running or e <= 0:
             return 0.0
-        return self.count / max(0.001, time.time() - self.start_time)
+        return self.count / max(0.001, e)
 
     def start(self):
         self.stop_event.clear()
         self.count = 0
+        self.rounds = 0
+        self._accum = 0.0
+        self._seg_start = 0.0
         self.running = True
         t = threading.Thread(target=self._run, daemon=True)
         self._thread = t
@@ -298,50 +354,71 @@ class ClickWorker:
 
     def _run(self):
         self.start_time = time.time()
-        self.add_log(T("log_start", x=self.x, y=self.y, i=self.interval * 1000,
-                       m=self.mode, v=self.value))
+        self._seg_start = self.start_time
+        now_str = time.strftime("%H:%M:%S")
+        if len(self.points) == 1 and not self.points[0].get("count", 0):
+            p0 = self.points[0]
+            self.add_log(T("log_start", x=p0["x"], y=p0["y"],
+                           i=float(p0.get("interval_ms", 0)), m=self.mode, v=self.value))
+        else:
+            self.add_log(T("log_start_queue", n=len(self.points),
+                           m=self.mode, v=self.value))
+
         reason = ""
-        while not self.stop_event.is_set():
-            # 暂停态：不投递、不计数，等 resume 或 stop（暂停期间鼠标自由，可操作窗口）
-            while self._paused.is_set() and not self.stop_event.is_set():
-                time.sleep(0.02)
-            if self.stop_event.is_set():
-                break
-            # 逃生机制①：硬性时长上限（防呆，杜绝超长锁死）
-            if time.time() - self.start_time >= MAX_RUNTIME_SEC:
-                reason = T("reason_max")
-                break
-            # 逃生机制②：stop.flag 文件兜底（另一个终端 touch 即停）
-            if os.path.exists(STOP_FLAG):
-                reason = T("reason_flag")
-                break
-
-            mouse_click(self.x, self.y)
-            self.count += 1
-
-            if self.mode == "count" and self.count >= self.value:
-                reason = T("reason_target")
-                break
-            if self.mode == "duration" and (time.time() - self.start_time) >= self.value:
-                reason = T("reason_target")
-                break
-
-            if self.interval > 0:
-                deadline = time.time() + self.interval
-                while time.time() < deadline:
+        while not self.stop_event.is_set() and not reason:
+            self.rounds += 1
+            for p in self.points:
+                if self.stop_event.is_set() or reason:
+                    break
+                px, py = p["x"], p["y"]
+                limit = int(p.get("count", 0) or 0)
+                iv = max(0.0, float(p.get("interval_ms", 0) or 0)) / 1000.0
+                done_in_item = 0
+                while not self.stop_event.is_set():
+                    # 暂停态：不投递、不计数、不计时，鼠标自由
+                    while self._paused.is_set() and not self.stop_event.is_set():
+                        time.sleep(0.02)
                     if self.stop_event.is_set():
                         break
-                    time.sleep(0.0005)
-                if self.stop_event.is_set():
+                    # 逃生①：硬性时长上限
+                    if self.elapsed >= MAX_RUNTIME_SEC:
+                        reason = T("reason_max")
+                        break
+                    # 逃生②：stop.flag 文件兜底
+                    if os.path.exists(STOP_FLAG):
+                        reason = T("reason_flag")
+                        break
+
+                    mouse_click(px, py)
+                    self.count += 1
+                    done_in_item += 1
+
+                    if self.mode == "count" and self.count >= self.value:
+                        reason = T("reason_target")
+                        break
+                    if self.mode == "duration" and self.elapsed >= self.value:
+                        reason = T("reason_target")
+                        break
+                    if limit and done_in_item >= limit:
+                        break
+                    if iv > 0:
+                        deadline = time.time() + iv
+                        while time.time() < deadline:
+                            if self.stop_event.is_set():
+                                break
+                            time.sleep(0.0005)
+                if reason:
                     break
 
-        elapsed = time.time() - self.start_time
+        self._accum = self.elapsed
+        elapsed = self._accum
+        self.running = False
         if not reason:
             reason = T("reason_manual")
         self.finished_reason = reason
-        self.running = False
-        self.add_log(T("log_finish", reason=reason, n=self.count,
-                       t=elapsed, r=self.count / elapsed))
+        self.add_log(T("log_finish", reason=reason,
+                       n=self.count, d=fmt_hms(elapsed),
+                       r=(self.count / elapsed) if elapsed > 0 else 0.0))
 
 
 # ======================= 全局热键监听 =======================
@@ -420,6 +497,7 @@ class AppDelegate(NSObject):
         self.worker = None
         self.log_view = None
         self._beep_snd = None   # 倒计时"滴"音效缓存实例
+        self.muted = False      # 提示音静音开关（复选框控制）
         # ---- 鼠标晃动打断状态机初始状态 ----
         self._int_state = "idle"            # idle | paused_wait | dialog
         self._last_move_ts = 0.0
@@ -626,7 +704,7 @@ class AppDelegate(NSObject):
     @objc.python_method
     def build_ui(self):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 600, 680),
+            NSMakeRect(0, 0, 600, 900),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
             NSWindowStyleMaskMiniaturizable,
             NSBackingStoreBuffered, False)
@@ -647,118 +725,168 @@ class AppDelegate(NSObject):
         title = NSTextField.labelWithString_(T("app_title"))
         title.setFont_(NSFont.boldSystemFontOfSize_(22))
         title.setTextColor_(NSColor.controlAccentColor())
-        title.setFrame_(NSMakeRect(16, 634, 300, 30))
+        title.setFrame_(NSMakeRect(16, 854, 300, 30))
         keep(title, "app_title")
         sub = NSTextField.labelWithString_(T("app_sub"))
         sub.setFont_(NSFont.systemFontOfSize_(12))
         sub.setTextColor_(NSColor.secondaryLabelColor())
-        sub.setFrame_(NSMakeRect(16, 610, 420, 18))
+        sub.setFrame_(NSMakeRect(16, 830, 420, 18))
         keep(sub, "app_sub")
         # 版本号（副标题右侧，mono 等宽）
         self.lbl_version = NSTextField.labelWithString_("v" + VERSION)
         self.lbl_version.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 4))
         self.lbl_version.setTextColor_(NSColor.tertiaryLabelColor())
         self.lbl_version.setAlignment_(NSTextAlignmentRight)
-        self.lbl_version.setFrame_(NSMakeRect(440, 610, 144, 18))
+        self.lbl_version.setFrame_(NSMakeRect(440, 830, 144, 18))
         content.addSubview_(self.lbl_version)
         # 关于按钮（右上角，语言下拉左侧）
-        self.btn_about = self._button(T("btn_about"), 392, 636, 54, 26, self.about_)
+        self.btn_about = self._button(T("btn_about"), 372, 856, 72, 26, self.about_)
         keep(self.btn_about, "btn_about")
-        # 语言下拉（右上角）：LANGUAGES 里新增即自动可切换
+        # 语言下拉（右上角）
         self.popup_lang = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(452, 636, 132, 26), False)
+            NSMakeRect(452, 856, 132, 26), False)
         self.popup_lang.addItemsWithTitles_(LANGUAGES)
-        self.popup_lang.selectItemAtIndex_(0)   # 默认中文
-        self.popup_lang.menu().setAutoenablesItems_(False)   # 避免菜单项被自动置灰
+        try:
+            self.popup_lang.selectItemAtIndex_(LANG_KEYS.index(current_lang))
+        except Exception:
+            self.popup_lang.selectItemAtIndex_(0)
+        self.popup_lang.menu().setAutoenablesItems_(False)
         self.popup_lang.setTarget_(self)
         self.popup_lang.setAction_(objc.selector(self.changeLang_))
         content.addSubview_(self.popup_lang)
-        content.addSubview_(self._separator(16, 596, 568))
+        content.addSubview_(self._separator(16, 816, 568))
 
         # ---------- ① 坐标拾取 ----------
-        keep(self._group_title(T("grp1"), 16, 560), "grp1")
-        keep(self._label(T("lbl_x"), 16, 522, 78, 24), "lbl_x")
-        self.field_x = self._input("2852", 96, 522, 62, 26)
+        keep(self._group_title(T("grp1"), 16, 780), "grp1")
+        keep(self._label(T("lbl_x"), 16, 744, 78, 24), "lbl_x")
+        self.field_x = self._input("2852", 96, 744, 62, 26)
         keep(self.field_x, None)
-        keep(self._label(T("lbl_y"), 164, 522, 42, 24), "lbl_y")
-        self.field_y = self._input("545", 208, 522, 62, 26)
+        keep(self._label(T("lbl_y"), 164, 744, 42, 24), "lbl_y")
+        self.field_y = self._input("545", 208, 744, 62, 26)
         keep(self.field_y, None)
-        keep(self._label(T("lbl_int"), 276, 522, 92, 24), "lbl_int")
-        self.field_interval = self._input("1", 370, 522, 62, 26)
+        keep(self._label(T("lbl_int"), 276, 744, 92, 24), "lbl_int")
+        self.field_interval = self._input("1", 370, 744, 62, 26)
         keep(self.field_interval, None)
-        keep(self._multiline_label(T("tip_interval"), 438, 514, 154, 40, font_size=9), "tip_interval")
+        keep(self._multiline_label(T("tip_interval"), 438, 736, 154, 40, font_size=9), "tip_interval")
 
-        self.btn_pick = self._button(T("btn_pick"), 16, 492, 176, 34, self.pick_)
+        self.btn_pick = self._button(T("btn_pick"), 16, 706, 176, 34, self.pick_)
         self.btn_pick.setToolTip_(T("tip_pick_tt"))
         keep(self.btn_pick, "btn_pick")
-        self.btn_test_pos = self._button(T("btn_test"), 200, 492, 140, 34, self.testPos_)
+        self.btn_test_pos = self._button(T("btn_test"), 200, 706, 140, 34, self.testPos_)
         self.btn_test_pos.setToolTip_(T("tip_test_tt"))
         keep(self.btn_test_pos, "btn_test")
-        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 350, 487, 240, 40, font_size=10)
+        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 350, 701, 240, 40, font_size=10)
         keep(self.lbl_pick, "lbl_pick_ready")
 
-        # ---- 坐标保存行：名称 + 保存 + 已保存下拉（载入） ----
-        self.field_saved_name = self._input("", 16, 452, 150, 26)
+        # ---- 坐标保存行 ----
+        self.field_saved_name = self._input("", 16, 670, 150, 26)
         self.field_saved_name.setPlaceholderString_(T("field_name"))
         keep(self.field_saved_name, None)
-        self.btn_save = self._button(T("btn_save"), 172, 452, 90, 26, self.saveCoord_)
+        self.btn_save = self._button(T("btn_save"), 172, 670, 90, 26, self.saveCoord_)
         keep(self.btn_save, "btn_save")
         self.popup_saved = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(268, 452, 150, 26), False)
+            NSMakeRect(268, 670, 150, 26), False)
         self.popup_saved.addItemWithTitle_(T("ph_saved"))
         self.popup_saved.menu().setAutoenablesItems_(False)
         self.popup_saved.setTarget_(self)
         self.popup_saved.setAction_(objc.selector(self.coordsChanged_))
         content.addSubview_(self.popup_saved)
-        keep(self._multiline_label(T("tip_saved"), 424, 444, 160, 32, font_size=9), "tip_saved")
-        content.addSubview_(self._separator(16, 440, 568))
-        self._reload_saved_list()   # 载入持久化坐标
+        keep(self._multiline_label(T("tip_saved"), 424, 662, 160, 32, font_size=9), "tip_saved")
+        content.addSubview_(self._separator(16, 660, 568))
+        self._reload_saved_list()
+
+        # ---------- ④ 多点队列 ----------
+        keep(self._group_title(T("grp4"), 16, 626), "grp4")
+        qscroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(16, 520, 568, 98))
+        qscroll.setHasVerticalScroller_(True)
+        qscroll.setAutohidesScrollers_(True)
+        self.queue_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 548, 98))
+        self.queue_view.setEditable_(False)
+        self.queue_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        self.queue_view.setBackgroundColor_(NSColor.textBackgroundColor())
+        self.queue_view.setTextColor_(NSColor.textColor())
+        self.queue_view.setTextContainerInset_((4, 6))
+        qscroll.setDocumentView_(self.queue_view)
+        content.addSubview_(qscroll)
+
+        keep(self._label(T("lbl_qcount"), 16, 490, 54, 24), "lbl_qcount")
+        self.field_qcount = self._input("1", 74, 490, 58, 26)
+        content.addSubview_(self.field_qcount)
+        keep(self._label(T("lbl_qint"), 136, 490, 70, 24), "lbl_qint")
+        self.field_qint = self._input("100", 210, 490, 64, 26)
+        content.addSubview_(self.field_qint)
+        self.btn_qadd = self._button(T("btn_qadd"), 272, 488, 140, 30, self.queueAdd_)
+        keep(self.btn_qadd, "btn_qadd")
+        self.btn_qdel = self._button(T("btn_qdel"), 416, 488, 96, 30, self.queueDel_)
+        keep(self.btn_qdel, "btn_qdel")
+        self.btn_qclear = self._button(T("btn_qclear"), 512, 488, 72, 30, self.queueClear_)
+        keep(self.btn_qclear, "btn_qclear")
+        keep(self._multiline_label(T("tip_queue"), 16, 464, 568, 18, font_size=9), "tip_queue")
+        content.addSubview_(self._separator(16, 458, 568))
 
         # ---------- ② 运行设置 ----------
-        keep(self._group_title(T("grp2"), 16, 416), "grp2")
-        keep(self._label(T("lbl_mode"), 16, 384, 96, 24), "lbl_mode")
+        keep(self._group_title(T("grp2"), 16, 424), "grp2")
+        keep(self._label(T("lbl_mode"), 16, 392, 96, 24), "lbl_mode")
         self.popup_mode = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(116, 384, 128, 26), False)
-        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count")])
-        self.popup_mode.menu().setAutoenablesItems_(False)   # 避免菜单项被自动置灰
+            NSMakeRect(116, 392, 190, 26), False)
+        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count"), T("mode_queue")])
+        self.popup_mode.menu().setAutoenablesItems_(False)
         content.addSubview_(self.popup_mode)
-        keep(self._label(T("lbl_value"), 252, 384, 82, 24), "lbl_value")
-        self.field_value = self._input("60", 336, 384, 70, 26)
+        keep(self._label(T("lbl_value"), 312, 392, 60, 24), "lbl_value")
+        self.field_value = self._input("60", 372, 392, 62, 26)
         keep(self.field_value, None)
-        keep(self._multiline_label(T("tip_stop"), 410, 374, 182, 40, font_size=9), "tip_stop")
-        content.addSubview_(self._separator(16, 370, 568))
+        # 静音开关
+        self.chk_mute = NSButton.checkboxWithTitle_target_action_(
+            T("chk_mute"), self, objc.selector(self.toggleMute_))
+        self.chk_mute.setFrame_(NSMakeRect(446, 390, 138, 24))
+        self.chk_mute.setState_(0)
+        self.chk_mute.setFont_(NSFont.systemFontOfSize_(12))
+        keep(self.chk_mute, "chk_mute")
+        keep(self._multiline_label(T("tip_stop"), 16, 362, 568, 18, font_size=9), "tip_stop")
+        content.addSubview_(self._separator(16, 354, 568))
 
         # ---------- ③ 控制 ----------
-        keep(self._group_title(T("grp3"), 16, 346), "grp3")
-        self.btn_start = self._button(T("btn_start"), 16, 302, 140, 34, self.start_)
+        keep(self._group_title(T("grp3"), 16, 320), "grp3")
+        self.btn_start = self._button(T("btn_start"), 16, 276, 140, 34, self.start_)
         keep(self.btn_start, "btn_start")
-        self.btn_test = self._button(T("btn_test10"), 166, 302, 148, 34, self.test_)
+        self.btn_test = self._button(T("btn_test10"), 166, 276, 148, 34, self.test_)
         keep(self.btn_test, "btn_test10")
-        self.btn_stop = self._button(T("btn_stop"), 324, 302, 140, 34, self.stop_)
+        self.btn_stop = self._button(T("btn_stop"), 324, 276, 140, 34, self.stop_)
         self.btn_stop.setEnabled_(False)
         keep(self.btn_stop, "btn_stop")
 
-        self.lbl_status = self._label(T("status_idle"), 16, 264, 180, 22)
+        self.lbl_status = self._label(T("status_idle"), 16, 240, 180, 22)
         content.addSubview_(self.lbl_status)
-        self.lbl_count = self._label(T("lbl_count", n=0), 204, 264, 150, 22)
+        self.lbl_count = self._label(T("lbl_count", n=0), 204, 240, 150, 22)
         content.addSubview_(self.lbl_count)
-        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 264, 220, 22)
+        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 240, 220, 22)
         content.addSubview_(self.lbl_rate)
 
+        # ---- 倒计时状态行：已过 / 剩余 / 总计 ----
+        self.lbl_elapsed = self._label(T("lbl_elapsed", t="00:00:00"), 16, 212, 190, 20, bold=True)
+        content.addSubview_(self.lbl_elapsed)
+        self.lbl_left = self._label(T("lbl_left", t="00:00:00"), 214, 212, 190, 20, bold=True)
+        content.addSubview_(self.lbl_left)
+        self.lbl_total = self._label(T("lbl_total", t="00:00:00"), 410, 212, 174, 20)
+        self.lbl_total.setAlignment_(NSTextAlignmentRight)
+        content.addSubview_(self.lbl_total)
+
         # ---------- 日志 ----------
-        keep(self._label(T("log_title"), 16, 238, 200, 20, bold=True), "log_title")
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 220))
+        keep(self._label(T("log_title"), 16, 186, 200, 20, bold=True), "log_title")
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 168))
         scroll.setHasVerticalScroller_(True)
         scroll.setAutohidesScrollers_(True)
-        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 220))
+        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 168))
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
-        # 系统动态颜色：自动跟随深色/浅色模式（夜间→黑底白字，浅色→白底黑字）
         self.log_view.setBackgroundColor_(NSColor.textBackgroundColor())
         self.log_view.setTextColor_(NSColor.textColor())
+        self.log_view.setTextContainerInset_((4, 6))
         scroll.setDocumentView_(self.log_view)
         content.addSubview_(scroll)
 
+        self._queue = self._load_queue()
+        self._refresh_queue_view()
         self.window.makeKeyAndOrderFront_(None)
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
@@ -775,9 +903,13 @@ class AppDelegate(NSObject):
     def _apply_lang(self):
         for ctrl, key in self._ui_keys:
             ctrl.setStringValue_(T(key))
-        # 运行模式下拉项
+        # 运行模式下拉项（保留当前选中）
+        sel = self.popup_mode.indexOfSelectedItem()
         self.popup_mode.removeAllItems()
-        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count")])
+        self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count"), T("mode_queue")])
+        if 0 <= sel < 3:
+            self.popup_mode.selectItemAtIndex_(sel)
+        self._refresh_queue_view()
         # 坐标保存：占位项 + 名称输入占位
         self.field_saved_name.setPlaceholderString_(T("field_name"))
         if hasattr(self, "popup_saved") and self._saved_coords is not None:
@@ -881,7 +1013,8 @@ class AppDelegate(NSObject):
         interval = float(self.field_interval.stringValue())
         if interval < 0:
             raise ValueError(T("err_interval"))
-        mode = "duration" if self.popup_mode.indexOfSelectedItem() == 0 else "count"
+        idx = self.popup_mode.indexOfSelectedItem()
+        mode = "duration" if idx == 0 else ("count" if idx == 1 else "queue")
         value = int(self.field_value.stringValue())
         if value <= 0:
             raise ValueError(T("err_value"))
@@ -889,6 +1022,8 @@ class AppDelegate(NSObject):
             raise ValueError(T("err_duration", n=MAX_RUNTIME_SEC // 60))
         if mode == "count" and value > MAX_COUNT:
             raise ValueError(T("err_count", n=MAX_COUNT))
+        if mode == "queue" and value > MAX_RUNTIME_SEC:
+            raise ValueError(T("err_duration", n=MAX_RUNTIME_SEC // 60))
         return x, y, interval, mode, value
 
     def start_(self, sender):
@@ -900,7 +1035,9 @@ class AppDelegate(NSObject):
     # ---------- 坐标拾取 ----------
     @objc.python_method
     def _beep(self):
-        """倒计时进行中：每秒一声短促'滴'（Tink 音效，不依赖系统 alert 声音设置）。"""
+        """倒计时进行中：每秒一声短促'滴'（Tink 音效，不依赖系统 alert 声音设置）。静音时直接跳过。"""
+        if getattr(self, "muted", False):
+            return
         try:
             if self._beep_snd is None:
                 self._beep_snd = NSSound.soundNamed_("Tink") or NSSound.soundNamed_("Pop")
@@ -918,7 +1055,9 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _chime(self):
-        """倒计时结束：一声'叮'（系统 Glass 音），提示时间到。"""
+        """倒计时结束：一声'叮'（系统 Glass 音），提示时间到。静音时直接跳过。"""
+        if getattr(self, "muted", False):
+            return
         try:
             s = NSSound.soundNamed_("Glass")
             if s is not None:
@@ -997,11 +1136,24 @@ class AppDelegate(NSObject):
         except Exception as e:
             self.show_alert(T("alert_bad"), str(e))
             return
-        if mode_override:
-            mode = mode_override
+        if mode_override == "duration":
+            # 测试按钮：沿用当前模式（队列模式仍按队列跑），只把目标改成 10 秒
+            if mode == "count":
+                mode = "duration"
             value = duration_override
 
-        self.worker = ClickWorker(x, y, interval, mode, value)
+        # 构造点击计划：队列模式用列表，单点模式等价于一个无限重复的点
+        if mode == "queue":
+            if not getattr(self, "_queue", None):
+                self.show_alert(T("alert_bad"), T("err_queue_empty"))
+                return
+            plan = [dict(p) for p in self._queue]
+            run_mode = "duration"        # 队列模式按总时长跑
+        else:
+            plan = [{"x": x, "y": y, "count": 0, "interval_ms": interval}]
+            run_mode = mode
+
+        self.worker = ClickWorker(plan, run_mode, value)
         self.worker.start()
         self._set_running(True)
         self.add_log("=" * 40)
@@ -1089,6 +1241,105 @@ class AppDelegate(NSObject):
         self.btn_test.setEnabled_(not running)
         self.btn_stop.setEnabled_(running)
         self.lbl_status.setStringValue_(T("status_run") if running else T("status_idle"))
+        if running:
+            self.lbl_elapsed.setStringValue_(T("lbl_elapsed", t="00:00:00"))
+            self.lbl_left.setStringValue_(T("lbl_left", t="00:00:00"))
+            self.lbl_total.setStringValue_(T("lbl_total", t="00:00:00"))
+
+    # ---------- 多点队列 ----------
+    def queueAdd_(self, sender):
+        """把坐标框的 X/Y + 次数 + 间隔加入队列（action，勿加 @objc.python_method）。"""
+        try:
+            x = int(self.field_x.stringValue())
+            y = int(self.field_y.stringValue())
+            cnt = int(self.field_qcount.stringValue() or "0")
+            iv = float(self.field_qint.stringValue() or "0")
+        except Exception:
+            self.show_alert(T("alert_bad"), T("msg_coordnum"))
+            return
+        if cnt < 0 or iv < 0:
+            self.show_alert(T("alert_bad"), T("err_interval"))
+            return
+        if len(getattr(self, "_queue", [])) >= 200:
+            self.show_alert(T("alert_notice"), T("err_count", n=200))
+            return
+        self._queue.append({"x": x, "y": y, "count": cnt, "interval_ms": iv})
+        self._save_queue(self._queue)
+        self._refresh_queue_view()
+        self.add_log(T("log_queue_add", i=len(self._queue), x=x, y=y,
+                       n=("∞" if not cnt else cnt), ms=("%g" % iv)))
+
+    def queueDel_(self, sender):
+        """删除队列末项（action）。"""
+        if getattr(self, "_queue", None):
+            self._queue.pop()
+            self._save_queue(self._queue)
+            self._refresh_queue_view()
+            self.add_log(T("log_queue_del"))
+
+    def queueClear_(self, sender):
+        """清空队列（action）。"""
+        self._queue = []
+        self._save_queue([])
+        self._refresh_queue_view()
+        self.add_log(T("log_queue_clear"))
+
+    def toggleMute_(self, sender):
+        """静音复选框（action）：勾选后倒计时提示音不再播放。"""
+        self.muted = bool(sender.state())
+        self.add_log(T("log_mute") if self.muted else T("log_unmute"))
+
+    @objc.python_method
+    def _refresh_queue_view(self):
+        if getattr(self, "queue_view", None) is None:
+            return
+        if not getattr(self, "_queue", None):
+            self.queue_view.setString_(T("que_empty"))
+            return
+        lines = []
+        for i, q in enumerate(self._queue):
+            c = int(q.get("count", 0) or 0)
+            lines.append("%d. (%d, %d)  ×%s  %gms" % (
+                i + 1, q["x"], q["y"], ("∞" if not c else c),
+                float(q.get("interval_ms", 0) or 0)))
+        self.queue_view.setString_("\n".join(lines))
+
+    @objc.python_method
+    def _save_queue(self, q):
+        try:
+            with open(MULTI_POINTS_PATH, "w", encoding="utf-8") as f:
+                json.dump(q, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _load_queue(self):
+        try:
+            with open(MULTI_POINTS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            out = []
+            for q in (data if isinstance(data, list) else []):
+                out.append({"x": int(q.get("x", 0)), "y": int(q.get("y", 0)),
+                            "count": int(q.get("count", 0) or 0),
+                            "interval_ms": float(q.get("interval_ms", 0) or 0)})
+            return out
+        except Exception:
+            return []
+
+    @objc.python_method
+    def _update_clock(self, w):
+        """倒计时三件套：已过 / 剩余 / 总计（HH:MM:SS；暂停时 elapsed 冻结，数值不动）。"""
+        e = w.elapsed
+        self.lbl_elapsed.setStringValue_(T("lbl_elapsed", t=fmt_hms(e)))
+        if w.mode == "duration":
+            total = float(w.value)
+            self.lbl_left.setStringValue_(T("lbl_left", t=fmt_hms(max(0.0, total - e))))
+            self.lbl_total.setStringValue_(T("lbl_total", t=fmt_hms(total)))
+        else:
+            r = w.rate
+            left = ((w.value - w.count) / r) if r > 0 else 0.0
+            self.lbl_left.setStringValue_(T("lbl_left", t="≈" + fmt_hms(left)))
+            self.lbl_total.setStringValue_(T("lbl_total", t="—"))
 
     def refresh_(self, timer):
         w = self.worker
@@ -1102,12 +1353,13 @@ class AppDelegate(NSObject):
         if w.running:
             self.lbl_count.setStringValue_(T("lbl_count", n=w.count))
             self.lbl_rate.setStringValue_(T("lbl_rate", r=w.rate))
+            self._update_clock(w)
         elif self.btn_stop.isEnabled():
             self._set_running(False)
             self.lbl_count.setStringValue_(T("lbl_count", n=w.count))
             self.lbl_rate.setStringValue_(T("lbl_rate", r=w.rate))
+            self._update_clock(w)
             self.worker = None
-
 
 def main():
     if not HAVE_QUARTZ:
