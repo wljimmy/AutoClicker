@@ -54,6 +54,7 @@ try:
         CFRunLoopGetMain, CFRunLoopAddSource, CFRunLoopRun,
         kCFRunLoopCommonModes, kCFAllocatorDefault,
         CGPreflightPostEventAccess, CGRequestPostEventAccess,
+        CGMainDisplayID, CGDisplayBounds,
     )
     HAVE_QUARTZ = True
 except ImportError:
@@ -709,7 +710,20 @@ class AppDelegate(NSObject):
             NSWindowStyleMaskMiniaturizable,
             NSBackingStoreBuffered, False)
         self.window.setTitle_("AutoClicker - 自动点击器 / Auto Clicker")
-        self.window.center()
+        # 固定 600×900，按主显示器物理尺寸居中
+        # （CGDisplayBounds 不依赖 NSScreen，启动早期也可靠；center() 在多屏环境会把窗口甩到屏外）
+        def _place_window():
+            try:
+                b = CGDisplayBounds(CGMainDisplayID())
+                sw, sh = float(b.size.width), float(b.size.height)
+            except Exception:
+                sw, sh = 1440.0, 900.0
+            wx = max(0.0, (sw - 600) / 2)
+            wy = max(0.0, (sh - 928) / 2)   # 928 = 900 内容高 + 标题栏
+            # 928 = 900 内容高 + 28 标题栏；setFrame 设的是含标题栏的 frame，少了会把顶部控件裁掉
+            self.window.setFrame_display_(NSMakeRect(wx, wy, 600, 928), True)
+        self._place_window = _place_window
+        _place_window()
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)   # 关窗即退出的兜底回调
         content = self.window.contentView()
@@ -888,6 +902,10 @@ class AppDelegate(NSObject):
         self._queue = self._load_queue()
         self._refresh_queue_view()
         self.window.makeKeyAndOrderFront_(None)
+        try:
+            self._place_window()
+        except Exception:
+            pass
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
 
     def changeLang_(self, sender):
