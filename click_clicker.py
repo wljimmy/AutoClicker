@@ -97,7 +97,7 @@ def _data_dir():
 DATA_DIR = _data_dir()
 STOP_FLAG = os.path.join(DATA_DIR, "stop.flag")
 
-VERSION = "0.6.0"   # 版本号：UI 副标题 + 关于面板展示
+VERSION = "0.5.0"   # 版本号：UI 副标题 + 关于面板展示
 GITHUB_URL = "https://github.com/wljimmy/AutoClicker"
 # 版权三行（verbatim，用户锁定）
 COPYRIGHT_1 = "Bingo Studio"
