@@ -25,10 +25,11 @@ import collections
 
 import objc
 from Foundation import (
-    NSObject, NSMakeRect, NSTimer, NSURL,
+    NSObject, NSMakeRect, NSTimer, NSURL, NSIndexSet, NSMutableIndexSet,
 )
 from AppKit import (
     NSApplication, NSWindow, NSButton, NSTextField, NSTextView, NSScrollView,
+    NSTableView, NSTableColumn, NSTableCellView,
     NSPopUpButton, NSFont, NSColor, NSBackingStoreBuffered, NSSound,
     NSWindowStyleMaskTitled, NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable, NSWindowStyleMaskResizable,
@@ -36,11 +37,12 @@ from AppKit import (
     NSAlert, NSWorkspace, NSBox, NSAlertFirstButtonReturn,
     NSEvent, NSCommandKeyMask, NSShiftKeyMask,
     NSEventMaskKeyDown, NSEventMaskMouseMoved, NSLeftMouseDownMask,
-    NSMutableAttributedString, NSForegroundColorAttributeName,
+    NSMutableAttributedString, NSAttributedString, NSForegroundColorAttributeName,
     NSFontAttributeName,
     NSLineBreakByWordWrapping,
     NSTextAlignmentRight,
     NSSavePanel, NSOpenPanel, NSModalResponseOK,
+    NSStackView, NSGridView, NSLayoutConstraint, NSNull, NSView,
 )
 
 # ======================= Quartz（macOS 专用） =======================
@@ -197,7 +199,9 @@ I18N = {
     "grp1":        {"zh": "① 坐标拾取", "en": "① Pick Coordinates"},
     "lbl_x":       {"zh": "坐标 X:", "en": "X:"},
     "lbl_y":       {"zh": "Y:", "en": "Y:"},
-    "lbl_int":     {"zh": "间隔(ms):", "en": "Interval(ms):"},
+    "lbl_int":     {"zh": "间隔", "en": "Gap"},
+    "lbl_name":    {"zh": "名称", "en": "Name"},
+    "lbl_saved":   {"zh": "已存", "en": "Saved"},
     "tip_interval": {"zh": "越小越快 · 游戏约 50 次/秒有效",
                      "en": "Smaller = Faster · ~50/s effective"},
     "btn_pick":    {"zh": "📌 拾取 (5s)", "en": "📌 Pick (5s)"},
@@ -218,6 +222,33 @@ I18N = {
     "btn_qsave":    {"zh": "💾 保存行", "en": "💾 Save Row"},
     "btn_qdel":     {"zh": "🗑 删除", "en": "🗑 Delete"},
     "btn_qclear":   {"zh": "清空", "en": "Clear"},
+    "btn_qdup":     {"zh": "⧉ 复制", "en": "⧉ Duplicate"},
+    # 表格列名
+    "col_no":       {"zh": "#", "en": "#"},
+    "col_tag":      {"zh": "标签", "en": "Tag"},
+    "col_x":        {"zh": "X", "en": "X"},
+    "col_y":        {"zh": "Y", "en": "Y"},
+    "col_count":    {"zh": "次数", "en": "Times"},
+    "col_iv":       {"zh": "间隔", "en": "Gap"},
+    "col_delay":    {"zh": "等待", "en": "Wait"},
+    # 批量设置区
+    "lbl_bcnt":     {"zh": "次数", "en": "Times"},
+    "lbl_bint":     {"zh": "间隔", "en": "Gap"},
+    "lbl_bdelay":   {"zh": "等待", "en": "Wait"},
+    "btn_bapply":   {"zh": "⇉ 应用到所选", "en": "⇉ Apply to rows"},
+    "btn_selall":   {"zh": "全选", "en": "All"},
+    "lbl_sel_n":    {"zh": "已选 {n} 行", "en": "{n} selected"},
+    "lbl_sel_0":    {"zh": "未选中行", "en": "No row selected"},
+    "err_sel_none": {"zh": "先在表格里选中至少一行（Shift/⌘ 可多选，或点『全选』）",
+                     "en": "Select at least one row (Shift/⌘ multi-select)"},
+    "err_cell_bad": {"zh": "「{f}」的值不合法（{v}），已还原。次数 0~1000000，间隔 0~600000，坐标 ±100000",
+                     "en": "Invalid {f}: {v} (reverted). Times 0-1000000, gap 0-600000, coord ±100000"},
+    "log_q_batch_del": {"zh": "🗑 已删除 {n} 行", "en": "🗑 Deleted {n} rows"},
+    "log_q_batch":  {"zh": "⇉ 已批量设置 {n} 行：×{c}，间隔 {ms}ms",
+                     "en": "⇉ Applied to {n} rows: ×{c} gap {ms}ms"},
+    "log_q_dup":    {"zh": "⧉ 已复制第 {i} 行（插在其后）", "en": "⧉ Duplicated row {i}"},
+    "log_row_edit": {"zh": "✎ 第 {i} 行 {f}：{a} → {b}", "en": "✎ Row {i} {f}: {a} -> {b}"},
+    "log_q_move":   {"zh": "↕ 第 {i} 行已移到第 {j} 位", "en": "↕ Row {i} moved to {j}"},
     # ---- 队列标签 + 数据文档 ----
     "lbl_qtag":     {"zh": "标签", "en": "Tag"},
     "ph_qtag":      {"zh": "这个点是干嘛的（可选）", "en": "What this point does (opt.)"},
@@ -261,8 +292,8 @@ I18N = {
     "err_empty_queue": {"zh": "当前队列是空的，没东西可存。先拾取/加入几个点。", "en": "Current queue is empty. Add some points first."},
     "lbl_qcount":   {"zh": "次数:", "en": "Times:"},
     "lbl_qint":     {"zh": "间隔(ms):", "en": "Gap(ms):"},
-    "tip_queue":    {"zh": "点一行载入下方编辑→保存行；次数=0=一直点；每轮点完整队列再循环",
-                     "en": "Click a row to edit it; Times=0=forever; one pass=one round"},
+    "tip_queue":    {"zh": "双击单元格直接改；Shift/⌘ 多选；拖动可换序；等待=进这一点前先停一下；次数=0=一直点",
+                     "en": "Double-click to edit; Shift/⌘ multi-select; drag to reorder; Times=0=forever; top-down order"},
     "que_empty":    {"zh": "队列为空：拾取→加入，或点『🎯 连采』连续记录点击",
                      "en": "Queue empty — pick & add, or hit 🎯 Record"},
     "mode_queue":   {"zh": "多点队列(按时长)", "en": "Multi-Point (by duration)"},
@@ -295,7 +326,7 @@ I18N = {
     "log_unmute":   {"zh": "🔊 提示音已恢复", "en": "🔊 Beeps on"},
     # ---- ② 运行设置 ----
     "grp2":        {"zh": "② 运行设置", "en": "② Run Settings"},
-    "lbl_mode":    {"zh": "运行模式:", "en": "Mode:"},
+    "lbl_mode":    {"zh": "模式", "en": "Mode"},
     "mode_duration": {"zh": "按时长(秒)", "en": "Duration(s)"},
     "mode_count":  {"zh": "按次数", "en": "Count"},
     "lbl_value":   {"zh": "数值:", "en": "Value:"},
@@ -380,7 +411,7 @@ I18N = {
                            "Check AutoClicker in the list, then close Settings and relaunch."},
     # ---- 坐标保存 ----
     "btn_save":     {"zh": "💾 保存", "en": "💾 Save"},
-    "field_name":   {"zh": "名称 Name", "en": "Name 名称"},
+    "field_name":   {"zh": "名称", "en": "Name"},
     "ph_saved":     {"zh": "— 已保存坐标 —", "en": "— Saved —"},
     "tip_saved":    {"zh": "命名后保存当前坐标，可从下拉直接载入",
                      "en": "Name & save current coords, load from dropdown"},
@@ -516,6 +547,14 @@ class ClickWorker:
             for p in self.points:
                 if self.stop_event.is_set() or reason:
                     break
+                # 前置等待：进入该点之前先等（下一组的延迟就写在下一点的这里）
+                dly = max(0.0, float(p.get("delay_ms", 0) or 0)) / 1000.0
+                if dly > 0:
+                    deadline = time.time() + dly
+                    while time.time() < deadline and not self.stop_event.is_set():
+                        time.sleep(0.001)
+                if self.stop_event.is_set():
+                    break
                 px, py = p["x"], p["y"]
                 limit = int(p.get("count", 0) or 0)
                 iv = max(0.0, float(p.get("interval_ms", 0) or 0)) / 1000.0
@@ -645,6 +684,26 @@ class HotkeyListener:
 
 
 # ======================= AppKit 原生 UI =======================
+class QueueTableView(NSTableView):
+    """队列表格：拦 ⌘A（无菜单绑定，selectAll 不会自动触发）；其余交回系统。"""
+
+    def keyDown_(self, ev):
+        try:
+            if ev.modifierFlags() & 1048576:      # NSEventModifierFlagCommand
+                if ev.charactersIgnoringModifiers() == "a":
+                    self.selectAll_(None)
+                    return
+        except Exception:
+            pass
+        NSTableView.keyDown_(self, ev)
+
+
+class FlippedView(NSView):
+    """坐标原点在左上角的容器：滚动内容与纵向排列都从顶部开始算。"""
+    def isFlipped(self):
+        return True
+
+
 class AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, notification):
         # ---- 数据文档：工作库 + 默认库（默认库不参与日常写入）----
@@ -670,7 +729,12 @@ class AppDelegate(NSObject):
         self._prev_vertex = None
         self._last_pos = None
         self._mouse_mon = None
-        self.build_ui()
+        try:
+            self.build_ui()
+        except Exception:
+            import traceback
+            open("/tmp/cc_ui_err.txt", "w").write(traceback.format_exc())
+            raise
         # 全局热键
         self.hotkey = HotkeyListener(lambda: self.worker)
         self.hotkey.on_stop = self._hotkey_stop_hook
@@ -869,61 +933,84 @@ class AppDelegate(NSObject):
     # ---------- 控件 ----------
     @objc.python_method
     def build_ui(self):
+        """原生网格布局：窗口可缩放 + 内容区滚动 + 日志/控制栏吸底。
+        横向由 NSGridView 固定列宽统一，纵向由 NSStackView 自动累加，不再手写坐标。
+        """
+        self.CW = 552.0           # 统一内容宽：区块 / 表格 / 日志 / 控制栏同宽同边界
+        self.SEC_W = self.CW
+        self.LBL = 40.0           # 字段标签列宽
+        self.FLD = 84.0           # 字段控件列宽
+        self.COL = 132.0          # 一组 = 标签40 + 间距8 + 控件84，正好等于跨两列的按钮
+        self.COLS = [self.LBL, self.FLD] * 4    # 8 列：4×(40+8+84) = 552
+        CTRL_H, LOG_H = 108.0, 150.0
+        W, H = 600.0, 880.0
+
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 600, 900),
+            NSMakeRect(0, 0, W, H),
             NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-            NSWindowStyleMaskMiniaturizable,
+            NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable,
             NSBackingStoreBuffered, False)
         self.window.setTitle_("AutoClicker - 自动点击器 / Auto Clicker")
-        # 固定 600×900，按主显示器物理尺寸居中
-        # （CGDisplayBounds 不依赖 NSScreen，启动早期也可靠；center() 在多屏环境会把窗口甩到屏外）
+        self.window.setMinSize_((600, 560))
+        self.window.setReleasedWhenClosed_(False)
+        self.window.setDelegate_(self)
+
         def _place_window():
             try:
                 b = CGDisplayBounds(CGMainDisplayID())
                 sw, sh = float(b.size.width), float(b.size.height)
             except Exception:
                 sw, sh = 1440.0, 900.0
-            wx = max(0.0, (sw - 600) / 2)
-            wy = max(0.0, (sh - 928) / 2)   # 928 = 900 内容高 + 标题栏
-            # 928 = 900 内容高 + 28 标题栏；setFrame 设的是含标题栏的 frame，少了会把顶部控件裁掉
-            self.window.setFrame_display_(NSMakeRect(wx, wy, 600, 928), True)
+            wx = max(0.0, (sw - W) / 2)
+            wy = max(0.0, (sh - (H + 28)) / 2)
+            self.window.setFrame_display_(NSMakeRect(wx, wy, W, H + 28), True)
         self._place_window = _place_window
         _place_window()
-        self.window.setReleasedWhenClosed_(False)
-        self.window.setDelegate_(self)   # 关窗即退出的兜底回调
+
         content = self.window.contentView()
-        self._ui_keys = []          # (控件, i18n key)：语言切换时统一刷新
+        self._ui_keys = []
+        self._grids = []
 
         def keep(ctrl, key):
-            content.addSubview_(ctrl)
             if key:
                 self._ui_keys.append((ctrl, key))
             return ctrl
 
-        # ---------- 大标题 + 语言切换 ----------
+        # ---------------- 内容滚动区 ----------------
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, CTRL_H + LOG_H, W, H - CTRL_H - LOG_H))
+        scroll.setHasVerticalScroller_(True)
+        scroll.setAutohidesScrollers_(True)
+        scroll.setDrawsBackground_(False)
+        content.addSubview_(scroll)
+        self._cscroll = scroll
+
+        root = FlippedView.alloc().initWithFrame_(NSMakeRect(0, 0, W, 1))
+        self._root = root
+        self._sections = []
+        scroll.setDocumentView_(root)
+
+        def add_section(view):
+            """新增一节：只往列表里追加，纵向位置由 _relayout 统一算。"""
+            self._sections.append(view)
+            root.addSubview_(view)
+            return view
+
+        self._add_section = add_section
+
+        # ---------------- 页头 ----------------
         title = NSTextField.labelWithString_(T("app_title"))
         title.setFont_(NSFont.boldSystemFontOfSize_(22))
         title.setTextColor_(NSColor.controlAccentColor())
-        title.setFrame_(NSMakeRect(16, 854, 300, 30))
+        title.setFrame_(NSMakeRect(0, 0, 320, 30))
         keep(title, "app_title")
-        sub = NSTextField.labelWithString_(T("app_sub"))
-        sub.setFont_(NSFont.systemFontOfSize_(12))
-        sub.setTextColor_(NSColor.secondaryLabelColor())
-        sub.setFrame_(NSMakeRect(16, 830, 420, 18))
-        keep(sub, "app_sub")
-        # 版本号（副标题右侧，mono 等宽）
-        self.lbl_version = NSTextField.labelWithString_("v" + VERSION)
-        self.lbl_version.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 4))
-        self.lbl_version.setTextColor_(NSColor.tertiaryLabelColor())
-        self.lbl_version.setAlignment_(NSTextAlignmentRight)
-        self.lbl_version.setFrame_(NSMakeRect(440, 830, 144, 18))
-        content.addSubview_(self.lbl_version)
-        # 关于按钮（右上角，语言下拉左侧）
-        self.btn_about = self._button(T("btn_about"), 372, 856, 72, 26, self.about_)
+
+        self.btn_about = NSButton.buttonWithTitle_target_action_(
+            T("btn_about"), self, objc.selector(self.about_))
+        self.btn_about.setFrame_(NSMakeRect(0, 0, 72, 26))
         keep(self.btn_about, "btn_about")
-        # 语言下拉（右上角）
+
         self.popup_lang = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(452, 856, 132, 26), False)
+            NSMakeRect(0, 0, 132, 26), False)
         self.popup_lang.addItemsWithTitles_(LANGUAGES)
         try:
             self.popup_lang.selectItemAtIndex_(LANG_KEYS.index(current_lang))
@@ -932,165 +1019,265 @@ class AppDelegate(NSObject):
         self.popup_lang.menu().setAutoenablesItems_(False)
         self.popup_lang.setTarget_(self)
         self.popup_lang.setAction_(objc.selector(self.changeLang_))
-        content.addSubview_(self.popup_lang)
-        content.addSubview_(self._separator(16, 816, 568))
 
-        # ---------- ① 坐标拾取 ----------
-        keep(self._group_title(T("grp1"), 16, 780), "grp1")
-        keep(self._label(T("lbl_x"), 16, 744, 78, 24), "lbl_x")
-        self.field_x = self._input("2852", 96, 744, 62, 26)
-        keep(self.field_x, None)
-        keep(self._label(T("lbl_y"), 164, 744, 42, 24), "lbl_y")
-        self.field_y = self._input("545", 208, 744, 62, 26)
-        keep(self.field_y, None)
-        keep(self._label(T("lbl_int"), 276, 744, 92, 24), "lbl_int")
-        self.field_interval = self._input("1", 370, 744, 62, 26)
-        keep(self.field_interval, None)
-        keep(self._multiline_label(T("tip_interval"), 438, 736, 154, 40, font_size=9), "tip_interval")
+        head1 = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, self.CW, 30))
+        title.setFrame_(NSMakeRect(0, 0, 320, 30))
+        head1.addSubview_(title)
+        self.popup_lang.setFrame_(NSMakeRect(self.CW - 132, 2, 132, 26))
+        head1.addSubview_(self.popup_lang)
+        self.btn_about.setFrame_(NSMakeRect(self.CW - 132 - 8 - 72, 2, 72, 26))
+        head1.addSubview_(self.btn_about)
 
-        self.btn_pick = self._button(T("btn_pick"), 16, 706, 148, 34, self.pick_)
+        sub = NSTextField.labelWithString_(T("app_sub"))
+        sub.setFont_(NSFont.systemFontOfSize_(12))
+        sub.setTextColor_(NSColor.secondaryLabelColor())
+        sub.setFrame_(NSMakeRect(0, 0, 364, 18))
+        keep(sub, "app_sub")
+
+        self.lbl_version = NSTextField.labelWithString_("v" + VERSION)
+        self.lbl_version.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 4))
+        self.lbl_version.setTextColor_(NSColor.tertiaryLabelColor())
+        self.lbl_version.setAlignment_(NSTextAlignmentRight)
+        self.lbl_version.setFrame_(NSMakeRect(0, 0, 180, 18))
+
+        head2 = self._hrow([sub, self.lbl_version])
+        head2.setFrameSize_((self.CW, 18))
+
+        self._add_section(self._vrow([head1, head2], spacing=6))
+        self._add_section(self._hsep())
+
+        # ---------------- ① 坐标拾取 ----------------
+        self.field_x = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_x.setStringValue_("2852")
+        self.field_y = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_y.setStringValue_("545")
+        self.field_interval = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_interval.setStringValue_("1")
+
+        self.tip_interval = self._tip2("tip_interval", "tip_saved")
+
+        self.btn_pick = NSButton.buttonWithTitle_target_action_(T("btn_pick"), self, objc.selector(self.pick_))
         self.btn_pick.setToolTip_(T("tip_pick_tt"))
         keep(self.btn_pick, "btn_pick")
-        self.btn_test_pos = self._button(T("btn_test"), 170, 706, 100, 34, self.testPos_)
+
+        self.btn_test_pos = NSButton.buttonWithTitle_target_action_(T("btn_test"), self, objc.selector(self.testPos_))
         self.btn_test_pos.setToolTip_(T("tip_test_tt"))
         keep(self.btn_test_pos, "btn_test")
-        # 连采：连续记录在其他窗口的真实点击，直接生成队列
-        self.btn_rec = self._button(T("btn_rec"), 276, 706, 116, 34, self.record_)
+
+        self.btn_rec = NSButton.buttonWithTitle_target_action_(T("btn_rec"), self, objc.selector(self.record_))
         self.btn_rec.setToolTip_(T("tip_rec_tt"))
         keep(self.btn_rec, "btn_rec")
-        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 398, 701, 186, 40, font_size=10)
-        keep(self.lbl_pick, "lbl_pick_ready")
 
-        # ---- 坐标保存行 ----
-        self.field_saved_name = self._input("", 16, 670, 150, 26)
+        self.lbl_pick = self._wide_label(T("lbl_pick_ready"), self.COL, 32, size=10)
+        self.lbl_pick.setTextColor_(NSColor.secondaryLabelColor())
+        self.lbl_pick.setLineBreakMode_(NSLineBreakByWordWrapping)
+        self.lbl_pick.cell().setWraps_(True)
+
+        self.field_saved_name = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
         self.field_saved_name.setPlaceholderString_(T("field_name"))
-        keep(self.field_saved_name, None)
-        self.btn_save = self._button(T("btn_save"), 172, 670, 90, 26, self.saveCoord_)
+
+        self.btn_save = NSButton.buttonWithTitle_target_action_(T("btn_save"), self, objc.selector(self.saveCoord_))
         keep(self.btn_save, "btn_save")
+
         self.popup_saved = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(268, 670, 150, 26), False)
+            NSMakeRect(0, 0, self.FLD, 26), False)
         self.popup_saved.addItemWithTitle_(T("ph_saved"))
         self.popup_saved.menu().setAutoenablesItems_(False)
         self.popup_saved.setTarget_(self)
         self.popup_saved.setAction_(objc.selector(self.coordsChanged_))
-        content.addSubview_(self.popup_saved)
-        keep(self._multiline_label(T("tip_saved"), 424, 662, 160, 32, font_size=9), "tip_saved")
-        content.addSubview_(self._separator(16, 660, 568))
-        self._reload_saved_list()
 
-        # ---------- ④ 多点队列 ----------
-        keep(self._group_title(T("grp4"), 16, 626), "grp4")
-        qscroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(16, 520, 568, 98))
+        sec1_grid = self._grid(
+            [[self._lab("lbl_x"), self.field_x, self._lab("lbl_y"), self.field_y,
+              self._lab("lbl_int"), (self.field_interval, 3)],
+             [(self.btn_pick, 2), (self.btn_test_pos, 2), (self.btn_rec, 2), (self.lbl_pick, 2)],
+             [self._lab("lbl_name"), self.field_saved_name, (self.btn_save, 2),
+              (self.popup_saved, 4)],
+             [(self.tip_interval, 8)]],
+            [32, 32, 30, 16], widths=self.COLS)
+        self._add_section(self._vrow([self._gtitle("grp1"), sec1_grid], spacing=8))
+
+        # ---------------- ② 多点队列 ----------------
+        self.queue_table = QueueTableView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, self.CW - 16, 112))
+        self.queue_table.setRowHeight_(17)
+        self.queue_table.setAllowsMultipleSelection_(True)
+        self.queue_table.setAllowsColumnReordering_(False)
+        self.queue_table.setAllowsColumnResizing_(True)
+        self.queue_table.setAllowsColumnSelection_(False)
+        self.queue_table.setUsesAlternatingRowBackgroundColors_(True)
+        self.queue_table.setSelectionHighlightStyle_(1)
+        self.queue_table.setDelegate_(self)
+        self.queue_table.setDataSource_(self)
+        self.queue_table.setTarget_(self)
+        self.queue_table.setDoubleAction_(objc.selector(self.queueTableDoubleClick_))
+        self.queue_table.registerForDraggedTypes_(["public.utf8-plain-text"])
+        self.queue_table.setDraggingSourceOperationMask_forLocal_(16, True)
+        self._build_queue_columns()
+
+        qbox = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, self.CW, 112))
+        qscroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, self.CW, 112))
         qscroll.setHasVerticalScroller_(True)
         qscroll.setAutohidesScrollers_(True)
-        self.queue_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 548, 98))
-        self.queue_view.setEditable_(False)
-        self.queue_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
-        self.queue_view.setBackgroundColor_(NSColor.textBackgroundColor())
-        self.queue_view.setTextColor_(NSColor.textColor())
-        self.queue_view.setTextContainerInset_((4, 6))
-        self.queue_view.setDelegate_(self)   # 选中行 → textViewDidChangeSelection_ 载入编辑栏
-        qscroll.setDocumentView_(self.queue_view)
-        content.addSubview_(qscroll)
+        qscroll.setBorderType_(2)
+        qscroll.setDocumentView_(self.queue_table)
+        qbox.addSubview_(qscroll)
+        self._qscroll = qscroll
 
-        # 标签行：这个点是干嘛的（可选，用于识别与二次修改）
-        keep(self._label(T("lbl_qtag"), 16, 494, 34, 22), "lbl_qtag")
-        self.field_qtag = self._input("", 52, 492, 164, 26)
-        self.field_qtag.setPlaceholderString_(T("ph_qtag"))
-        keep(self.field_qtag, None)
-        keep(self._label(T("lbl_qcount_s"), 222, 494, 32, 22), "lbl_qcount_s")
-        self.field_qcount = self._input("1", 256, 492, 46, 26)
-        content.addSubview_(self.field_qcount)
-        keep(self._label(T("lbl_qint_s"), 308, 494, 54, 22), "lbl_qint_s")
-        self.field_qint = self._input("100", 364, 492, 54, 26)
-        content.addSubview_(self.field_qint)
-        keep(self._multiline_label(T("tip_inf"), 424, 490, 150, 30, font_size=9), "tip_inf")
+        self.field_bcount = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_bcount.setStringValue_("1")
+        self.field_bint = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_bint.setStringValue_("100")
+        self.field_bdelay = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, self.FLD, 26))
+        self.field_bdelay.setStringValue_("0")
 
-        self.btn_qadd = self._button(T("btn_qadd"), 16, 458, 104, 30, self.queueAdd_)
-        keep(self.btn_qadd, "btn_qadd")
-        self.btn_qsave = self._button(T("btn_qsave"), 126, 458, 96, 30, self.queueSaveRow_)
-        self.btn_qsave.setEnabled_(False)
-        keep(self.btn_qsave, "btn_qsave")
-        self.btn_qdel = self._button(T("btn_qdel"), 228, 458, 76, 30, self.queueDel_)
-        keep(self.btn_qdel, "btn_qdel")
-        self.btn_qclear = self._button(T("btn_qclear"), 310, 458, 76, 30, self.queueClear_)
-        keep(self.btn_qclear, "btn_qclear")
-        # 数据文档入口（独立面板）
-        self.btn_data = self._button(T("btn_data"), 472, 458, 112, 30, self.openDataPanel_)
+        self.btn_bapply = NSButton.buttonWithTitle_target_action_(T("btn_bapply"), self, objc.selector(self.applyBatch_))
+        keep(self.btn_bapply, "btn_bapply")
+
+        self.btn_selall = NSButton.buttonWithTitle_target_action_(T("btn_selall"), self, objc.selector(self.selectAllRows_))
+        keep(self.btn_selall, "btn_selall")
+
+        self.lbl_selinfo = self._wide_label(T("lbl_sel_0"), self.COL, 22, size=11)
+        self.lbl_selinfo.setTextColor_(NSColor.secondaryLabelColor())
+
+        batch_grid = self._grid(
+            [[self._lab("lbl_bcnt"), self.field_bcount, self._lab("lbl_bint"), self.field_bint,
+              self._lab("lbl_bdelay"), self.field_bdelay, (self.btn_bapply, 2)],
+             [(NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 1, 1)), 4),
+              (self.btn_selall, 2), (self.lbl_selinfo, 2)]],
+            [30, 30], widths=self.COLS)
+
+        self.btn_qadd = NSButton.buttonWithTitle_target_action_(T("btn_qadd"), self, objc.selector(self.queueAdd_))
+        self.btn_qdup = NSButton.buttonWithTitle_target_action_(T("btn_qdup"), self, objc.selector(self.queueDup_))
+        self.btn_qdel = NSButton.buttonWithTitle_target_action_(T("btn_qdel"), self, objc.selector(self.queueDel_))
+        self.btn_qclear = NSButton.buttonWithTitle_target_action_(T("btn_qclear"), self, objc.selector(self.queueClear_))
+        for b, k in ((self.btn_qadd, "btn_qadd"), (self.btn_qdup, "btn_qdup"),
+                     (self.btn_qdel, "btn_qdel"), (self.btn_qclear, "btn_qclear")):
+            keep(b, k)
+
+        btn_grid = self._grid([[(self.btn_qadd, 2), (self.btn_qdup, 2),
+                                (self.btn_qdel, 2), (self.btn_qclear, 2)]],
+                              [30], widths=self.COLS)
+
+        self.btn_data = NSButton.buttonWithTitle_target_action_(T("btn_data"), self, objc.selector(self.openDataPanel_))
+        self.btn_data.setFrame_(NSMakeRect(self.CW - 112, 0, 112, 26))
         keep(self.btn_data, "btn_data")
-        keep(self._multiline_label(T("tip_queue"), 16, 436, 568, 16, font_size=9), "tip_queue")
-        content.addSubview_(self._separator(16, 430, 568))
 
-        # ---------- ② 运行设置 ----------
-        keep(self._group_title(T("grp2"), 16, 396), "grp2")
-        keep(self._label(T("lbl_mode"), 16, 364, 96, 24), "lbl_mode")
+        qhead = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, self.CW, 26))
+        gt4 = self._gtitle("grp4")
+        gt4.setFrameOrigin_((0, 4))
+        qhead.addSubview_(gt4)
+        qhead.addSubview_(self.btn_data)
+
+        self._add_section(self._vrow([qhead, qbox, batch_grid, btn_grid,
+                                      self._tip("tip_queue")], spacing=8))
+
+        # ---------------- ③ 运行设置 ----------------
         self.popup_mode = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(116, 364, 190, 26), False)
+            NSMakeRect(0, 0, self.COL, 26), False)
         self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count"), T("mode_queue")])
         self.popup_mode.menu().setAutoenablesItems_(False)
-        content.addSubview_(self.popup_mode)
-        keep(self._label(T("lbl_value"), 312, 364, 60, 24), "lbl_value")
-        self.field_value = self._input("60", 372, 364, 62, 26)
-        keep(self.field_value, None)
-        # 静音开关
+
+        self.field_value = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 100, 26))
+        self.field_value.setStringValue_("60")
+
         self.chk_mute = NSButton.checkboxWithTitle_target_action_(
             T("chk_mute"), self, objc.selector(self.toggleMute_))
-        self.chk_mute.setFrame_(NSMakeRect(446, 362, 138, 24))
         self.chk_mute.setState_(0)
         self.chk_mute.setFont_(NSFont.systemFontOfSize_(12))
         keep(self.chk_mute, "chk_mute")
-        keep(self._multiline_label(T("tip_stop"), 16, 334, 568, 18, font_size=9), "tip_stop")
-        content.addSubview_(self._separator(16, 326, 568))
 
-        # ---------- ③ 控制 ----------
-        keep(self._group_title(T("grp3"), 16, 292), "grp3")
-        self.btn_start = self._button(T("btn_start"), 16, 248, 140, 34, self.start_)
-        keep(self.btn_start, "btn_start")
-        self.btn_test = self._button(T("btn_test10"), 166, 248, 148, 34, self.test_)
-        keep(self.btn_test, "btn_test10")
-        self.btn_stop = self._button(T("btn_stop"), 324, 248, 140, 34, self.stop_)
+        sec3_grid = self._grid(
+            [[self._lab("lbl_mode"), self.popup_mode, self._lab("lbl_value"),
+              self.field_value, self.chk_mute]],
+            [30], widths=[40, 132, 40, 100, 208])
+        self._add_section(self._vrow([self._gtitle("grp2"), sec3_grid], spacing=8))
+
+        # ---------------- 控制栏（吸底） ----------------
+        ctrl_box = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, W, CTRL_H))
+        content.addSubview_(ctrl_box)
+        self._ctrl_box = ctrl_box
+        ctrl_sep = NSBox.alloc().initWithFrame_(NSMakeRect(0, CTRL_H - 1, W, 1))
+        ctrl_sep.setBoxType_(2)
+        ctrl_box.addSubview_(ctrl_sep)
+        self._ctrl_sep = ctrl_sep
+
+        self.btn_start = NSButton.buttonWithTitle_target_action_(T("btn_start"), self, objc.selector(self.start_))
+        self.btn_test = NSButton.buttonWithTitle_target_action_(T("btn_test10"), self, objc.selector(self.test_))
+        self.btn_stop = NSButton.buttonWithTitle_target_action_(T("btn_stop"), self, objc.selector(self.stop_))
         self.btn_stop.setEnabled_(False)
-        keep(self.btn_stop, "btn_stop")
+        for b, k in ((self.btn_start, "btn_start"), (self.btn_test, "btn_test10"), (self.btn_stop, "btn_stop")):
+            keep(b, k)
 
-        self.lbl_status = self._label(T("status_idle"), 16, 212, 180, 22)
-        content.addSubview_(self.lbl_status)
-        self.lbl_count = self._label(T("lbl_count", n=0), 204, 212, 150, 22)
-        content.addSubview_(self.lbl_count)
-        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 212, 220, 22)
-        content.addSubview_(self.lbl_rate)
+        self.lbl_status = self._wide_label(T("status_idle"), 179, 20, size=11)
+        self.lbl_count = self._wide_label(T("lbl_count", n=0), 179, 20, size=11)
+        self.lbl_rate = self._wide_label(T("lbl_rate", r=0.0), 178, 20, size=11)
 
-        # ---- 倒计时状态行：已过 / 剩余 / 总计 ----
-        self.lbl_elapsed = self._label(T("lbl_elapsed", t="00:00:00"), 16, 184, 190, 20, bold=True)
-        content.addSubview_(self.lbl_elapsed)
-        self.lbl_left = self._label(T("lbl_left", t="00:00:00"), 214, 184, 190, 20, bold=True)
-        content.addSubview_(self.lbl_left)
-        self.lbl_total = self._label(T("lbl_total", t="00:00:00"), 410, 184, 174, 20)
-        self.lbl_total.setAlignment_(NSTextAlignmentRight)
-        content.addSubview_(self.lbl_total)
+        self.lbl_elapsed = self._wide_label(T("lbl_elapsed", t="00:00:00"), 179, 18, bold=True)
+        self.lbl_left = self._wide_label(T("lbl_left", t="00:00:00"), 179, 18, bold=True)
+        self.lbl_total = self._wide_label(T("lbl_total", t="00:00:00"), 178, 18, align=NSTextAlignmentRight)
 
-        # ---------- 日志 ----------
-        keep(self._label(T("log_title"), 16, 158, 200, 20, bold=True), "log_title")
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 140))
-        scroll.setHasVerticalScroller_(True)
-        scroll.setAutohidesScrollers_(True)
-        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 140))
+        ctrl_grid = self._grid(
+            [[self.btn_start, self.btn_test, self.btn_stop],
+             [self.lbl_status, self.lbl_count, self.lbl_rate],
+             [self.lbl_elapsed, self.lbl_left, self.lbl_total]],
+            [32, 20, 18], widths=[179, 179, 178])
+        ctrl_grid.setFrameOrigin_((16, 8))
+        ctrl_box.addSubview_(ctrl_grid)
+        self._ctrl_grid = ctrl_grid
+
+        # ---------------- 日志（吸底，在控制栏之上） ----------------
+        log_box = NSView.alloc().initWithFrame_(NSMakeRect(0, CTRL_H, W, LOG_H))
+        content.addSubview_(log_box)
+        self._log_box = log_box
+
+        log_sep = NSBox.alloc().initWithFrame_(NSMakeRect(0, LOG_H - 1, W, 1))
+        log_sep.setBoxType_(2)
+        log_box.addSubview_(log_sep)
+        self._log_sep = log_sep
+
+        lt = NSTextField.labelWithString_(T("log_title"))
+        lt.setFont_(NSFont.boldSystemFontOfSize_(13))
+        lt.setFrame_(NSMakeRect(24, LOG_H - 24, 200, 18))
+        log_box.addSubview_(lt)
+        keep(lt, "log_title")
+        self._log_title = lt
+
+        log_scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(16, 8, self.CW, LOG_H - 34))
+        log_scroll.setHasVerticalScroller_(True)
+        log_scroll.setAutohidesScrollers_(True)
+        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, self.CW - 16, LOG_H - 34))
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
         self.log_view.setBackgroundColor_(NSColor.textBackgroundColor())
         self.log_view.setTextColor_(NSColor.textColor())
         self.log_view.setTextContainerInset_((4, 6))
-        scroll.setDocumentView_(self.log_view)
-        content.addSubview_(scroll)
+        log_scroll.setDocumentView_(self.log_view)
+        log_box.addSubview_(log_scroll)
+        self._log_scroll = log_scroll
 
+        # ---------------- 状态 ----------
         self._queue = self._load_queue()
-        self._queue_sel = None      # 当前选中行（None=未选）
+        self._queue_sel = None
         self._refresh_queue_view()
+        self._reload_saved_list()
+
         self.window.makeKeyAndOrderFront_(None)
+        self._relayout()
         try:
-            self._place_window()
+            NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                0.15, False, lambda t: self._relayout())
         except Exception:
             pass
+
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+
+    # ---- NSWindowDelegate（ObjC 回调，勿加 python_method） ----
+    def windowDidResize_(self, note):
+        """窗口缩放：滚动区/日志/控制栏贴底重排，内容栈高度贴合。"""
+        try:
+            self._relayout()
+        except Exception:
+            pass
 
     def changeLang_(self, sender):
         """语言下拉切换：刷新所有静态控件 + 模式项 + 动态状态。
@@ -1102,9 +1289,59 @@ class AppDelegate(NSObject):
             self._apply_lang()
 
     @objc.python_method
+    def _est_text_w(self, text):
+        """粗估文本像素宽：ASCII 按 0.56×字号，其它按 1.0×字号。"""
+        size = 13.0
+        w = 0.0
+        for ch in str(text):
+            w += size * (0.50 if ord(ch) < 128 else 1.0)
+        return w
+
+    @objc.python_method
+    def _set_btn_title(self, btn, key):
+        """按钮标题统一入口：定宽内能放下就用全称，放不下逐字截断加省略号，
+        完整文案进 tooltip。为多语言（德语/俄语等长词）预留。"""
+        txt = T(key)
+        try:
+            btn.setToolTip_(txt)
+        except Exception:
+            pass
+        try:
+            maxw = float(btn.frame().size.width) - 12.0
+        except Exception:
+            maxw = 0.0
+        try:
+            if maxw <= 24.0 or self._est_text_w(txt) <= maxw:
+                btn.setTitle_(txt)
+                return
+            cut = ""
+            for ch in txt:
+                if self._est_text_w(cut + ch + "…") > maxw:
+                    break
+                cut += ch
+            btn.setTitle_((cut.rstrip() + "…") if cut else "…")
+        except Exception:
+            pass
+
+    @objc.python_method
     def _apply_lang(self):
         for ctrl, key in self._ui_keys:
-            ctrl.setStringValue_(T(key))
+            txt = T(key)
+            # 按钮：定宽 + 超长缩写 + tooltip 完整文案；其它控件走 setStringValue_
+            try:
+                if ctrl.isKindOfClass_(NSButton):
+                    self._set_btn_title(ctrl, key)
+                    continue
+            except Exception:
+                pass
+            for setter in ("setStringValue_", "setTitle_"):
+                if not hasattr(ctrl, setter):
+                    continue
+                try:
+                    getattr(ctrl, setter)(txt)
+                    break
+                except Exception:
+                    continue
         # 运行模式下拉项（保留当前选中）
         sel = self.popup_mode.indexOfSelectedItem()
         self.popup_mode.removeAllItems()
@@ -1112,13 +1349,30 @@ class AppDelegate(NSObject):
         if 0 <= sel < 3:
             self.popup_mode.selectItemAtIndex_(sel)
         self._refresh_queue_view()
+        # 表格列名随语言切换
+        try:
+            for col in self.queue_table.tableColumns():
+                col.setTitle_(T("col_" + str(col.identifier())))
+        except Exception:
+            pass
         # 坐标保存：占位项 + 名称输入占位
         self.field_saved_name.setPlaceholderString_(T("field_name"))
-        if hasattr(self, "popup_saved") and self._saved_coords is not None:
-            self._reload_saved_list()
+        if hasattr(self, "popup_saved"):
+            if self._saved_coords is not None:
+                self._reload_saved_list()
+            else:
+                try:
+                    self.popup_saved.removeAllItems()
+                    self.popup_saved.addItemWithTitle_(T("ph_saved"))
+                except Exception:
+                    pass
         # 按钮 tooltip
         self.btn_pick.setToolTip_(T("tip_pick_tt"))
         self.btn_test_pos.setToolTip_(T("tip_test_tt"))
+        # 倒计时三行（空闲时不会跑 refresh_，必须在这里补）
+        self.lbl_elapsed.setStringValue_(T("lbl_elapsed", t="00:00:00"))
+        self.lbl_left.setStringValue_(T("lbl_left", t="00:00:00"))
+        self.lbl_total.setStringValue_(T("lbl_total", t="00:00:00"))
         # 动态状态（运行中/空闲、投递数、速率）
         running = self.worker is not None and self.worker.running
         self.lbl_status.setStringValue_(T("status_run") if running else T("status_idle"))
@@ -1130,7 +1384,200 @@ class AppDelegate(NSObject):
             self.lbl_count.setStringValue_(T("lbl_count", n=0))
             self.lbl_rate.setStringValue_(T("lbl_rate", r=0.0))
 
+    # ---------- 原生网格构建（新增）：不再手写坐标 ----------
+    @objc.python_method
+    def _grid(self, rows, heights, widths=None, spacing=8):
+        """定宽网格：每格宽度锁死、行高锁死，行内纵向居中。
+        用普通容器自行定位（NSGridView 在无约束环境下不会给子视图排位，会全叠在原点）。"""
+        ws = list(widths or ([self.COL] * max(len(r) for r in rows)))
+        total_w = sum(ws) + spacing * max(0, len(ws) - 1)
+        total_h = sum(heights) + spacing * max(0, len(heights) - 1)
+        box = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, total_w, total_h))
+        y = total_h
+        for r, row in enumerate(rows):
+            h = float(heights[r])
+            y -= h
+            x = 0.0
+            c = 0
+            for cell in row:
+                v, span = cell if isinstance(cell, tuple) else (cell, 1)
+                w = sum(ws[c:c + span]) + spacing * (span - 1)
+                vh = float(v.frame().size.height) or h
+                v.setFrame_(NSMakeRect(x, y + max(0.0, (h - vh) / 2.0), w, vh))
+                box.addSubview_(v)
+                x += w + spacing
+                c += span
+            y -= spacing
+        return box
+
+    @objc.python_method
+    def _tip2(self, k1, k2, w=None):
+        """一行两段说明，左右并排，宽度铺满。"""
+        ww = float(w or self.CW)
+        box = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, ww, 16))
+        half = (ww - 12.0) / 2.0
+        a = self._tip(k1, w=half)
+        b = self._tip(k2, w=half)
+        a.setFrameOrigin_((0.0, 0.0))
+        b.setFrameOrigin_((half + 12.0, 0.0))
+        box.addSubview_(a)
+        box.addSubview_(b)
+        return box
+
+    @objc.python_method
+    def _lab(self, text_key, w=None, h=16):
+        """一格里的字段标签：宽度固定，与右侧控件严格同起点。"""
+        lbl = NSTextField.labelWithString_(T(text_key))
+        lbl.setFont_(NSFont.systemFontOfSize_(11))
+        lbl.setFrame_(NSMakeRect(0, 0, float(w or self.LBL), h))
+        self._ui_keys.append((lbl, text_key))
+        return lbl
+
+    @objc.python_method
+    def _gtitle(self, text_key):
+        lbl = NSTextField.labelWithString_(T(text_key))
+        lbl.setFont_(NSFont.systemFontOfSize_weight_(13, 600))
+        lbl.setTextColor_(NSColor.controlAccentColor())
+        lbl.setFrame_(NSMakeRect(0, 0, 300, 22))
+        self._ui_keys.append((lbl, text_key))
+        return lbl
+
+    @objc.python_method
+    def _tip(self, text_key=None, text=None, w=None):
+        lbl = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, float(w or self.SEC_W), 16))
+        lbl.setStringValue_(text if text is not None else T(text_key))
+        lbl.setEditable_(False)
+        lbl.setSelectable_(False)
+        lbl.setBordered_(False)
+        lbl.setBezeled_(False)
+        lbl.setDrawsBackground_(False)
+        lbl.setFont_(NSFont.systemFontOfSize_(9))
+        lbl.setTextColor_(NSColor.secondaryLabelColor())
+        lbl.setLineBreakMode_(NSLineBreakByWordWrapping)
+        lbl.cell().setWraps_(True)
+        if text_key:
+            self._ui_keys.append((lbl, text_key))
+        return lbl
+
+    @objc.python_method
+    def _wide_label(self, text, w=None, h=20, bold=False, align=None, size=13):
+        lbl = NSTextField.labelWithString_(text)
+        lbl.setFrame_(NSMakeRect(0, 0, float(w or self.SEC_W), h))
+        lbl.setFont_(NSFont.boldSystemFontOfSize_(size) if bold else NSFont.systemFontOfSize_(size))
+        if align is not None:
+            lbl.setAlignment_(align)
+        return lbl
+
+    @objc.python_method
+    def _hrow(self, views, spacing=8.0):
+        """一行：横向依次排开，纵向各自居中。"""
+        w = sum(float(v.frame().size.width) for v in views) + spacing * max(0, len(views) - 1)
+        hh = max([float(v.frame().size.height) for v in views] or [26.0])
+        box = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, hh))
+        x = 0.0
+        for v in views:
+            vh = float(v.frame().size.height)
+            v.setFrameOrigin_((x, max(0.0, (hh - vh) / 2.0)))
+            box.addSubview_(v)
+            x += float(v.frame().size.width) + spacing
+        return box
+
+    @objc.python_method
+    def _vrow(self, views, spacing=8.0, width=None):
+        """一列：纵向依次排开（左上原点，自上而下）。"""
+        w = max([float(x.frame().size.width) for x in views] or [float(width or self.SEC_W)])
+        if width:
+            w = float(width)
+        hh = sum(float(x.frame().size.height) for x in views) + spacing * max(0, len(views) - 1)
+        box = FlippedView.alloc().initWithFrame_(NSMakeRect(0, 0, w, hh))
+        y = 0.0
+        for x in views:
+            x.setFrameOrigin_((0, y))
+            box.addSubview_(x)
+            y += float(x.frame().size.height) + spacing
+        return box
+
+    @objc.python_method
+    def _relayout(self):
+        """窗口尺寸变化后：把滚动区/日志/控制栏贴到底部，并让内容栈高度贴合。"""
+        try:
+            fr = self.window.contentView().frame()
+            W, H = float(fr.size.width), float(fr.size.height)
+            CTRL_H = 108.0
+            LOG_H = max(110.0, min(150.0, H - 560.0))
+            self._cscroll.setFrame_(NSMakeRect(0, CTRL_H + LOG_H, W, max(120.0, H - CTRL_H - LOG_H)))
+            self._log_box.setFrame_(NSMakeRect(0, CTRL_H, W, LOG_H))
+            self._ctrl_box.setFrame_(NSMakeRect(0, 0, W, CTRL_H))
+            m = max(16.0, (W - self.CW) / 2.0)
+            self._log_scroll.setFrame_(NSMakeRect(m, 8, self.CW, LOG_H - 34))
+            try:
+                self._log_title.setFrameOrigin_((m, LOG_H - 24.0))
+                self._log_sep.setFrame_(NSMakeRect(0, LOG_H - 1, W, 1))
+                self._ctrl_sep.setFrame_(NSMakeRect(0, CTRL_H - 1, W, 1))
+            except Exception:
+                pass
+            try:
+                self._ctrl_grid.setFrameOrigin_((m, 8.0))
+            except Exception:
+                pass
+            docw = max(self.CW + 32.0, float(self._cscroll.contentSize().width))
+            root = self._root
+            y = 16.0
+            if os.environ.get("CC_DUMP_BOXES"):
+                self._dump_boxes()
+            for sec in self._sections:
+                sec.setFrameOrigin_((m, y))
+                y += float(sec.frame().size.height) + 10.0
+            root.setFrameSize_((docw, max(y + 8.0, float(self._cscroll.contentSize().height))))
+            if getattr(self, "_need_scroll_top", True):
+                self._need_scroll_top = False
+                try:
+                    self._cscroll.contentView().scrollToPoint_((0.0, 0.0))
+                    self._cscroll.reflectScrolledClipView_(self._cscroll.contentView())
+                except Exception:
+                    pass
+            pass
+            pass
+        except Exception:
+            pass
+
+    @objc.python_method
+    def _dump_boxes(self):
+        """把每个可见控件的窗口坐标与宽度打到文件，用来核对左右边界是否一致。"""
+        lines = []
+        W = float(self.window.contentView().frame().size.width)
+
+        def walk(v, depth, tag):
+            if depth > 7:
+                return
+            try:
+                r = v.convertRect_toView_(v.bounds(), None)
+                cls = v.className()
+                extra = ""
+                if cls == "NSTextField":
+                    extra = " | " + str(v.stringValue())[:18]
+                elif cls == "NSButton":
+                    extra = " | " + str(v.title())[:18]
+                lines.append("%s%s x=%.1f right=%.1f w=%.1f y=%.1f h=%.1f%s" % (
+                    "  " * depth, cls, r.origin.x, r.origin.x + r.size.width,
+                    r.size.width, r.origin.y, r.size.height, extra))
+            except Exception:
+                pass
+            for sub in v.subviews():
+                walk(sub, depth + 1, tag)
+
+        walk(self.window.contentView(), 0, "")
+        lines.insert(0, "WINDOW content W=%.1f" % W)
+        open("/tmp/cc_boxes.txt", "w").write("\n".join(lines))
+
     # ---------- 辅助构建 ----------
+    @objc.python_method
+    def _hsep(self):
+        """横向分隔线：整宽 1px，交给 stack 自动排位。"""
+        box = NSBox.alloc().initWithFrame_(NSMakeRect(0, 0, self.SEC_W, 1))
+        box.setBoxType_(2)      # NSBoxSeparator
+        return box
+
     @objc.python_method
     def _group_title(self, text, x, y):
         lbl = NSTextField.labelWithString_(text)
@@ -1352,7 +1799,9 @@ class AppDelegate(NSObject):
                             "interval_ms": float(p.get("interval_ms", 0) or 0),
                             "name": str(p.get("name", "") or "")} for p in pts]
             self._queue_sel = None
-            self.field_qtag.setStringValue_("")
+            self.field_bcount.setStringValue_("1")
+            self.field_bint.setStringValue_("100")
+            self.field_bdelay.setStringValue_("0")
             self._save_queue(self._queue)
             self._refresh_queue_view()
             self.add_log(T("log_q_load", n=q.get("name", "?"), k=len(self._queue)))
@@ -1703,88 +2152,334 @@ class AppDelegate(NSObject):
             self.lbl_left.setStringValue_(T("lbl_left", t="00:00:00"))
             self.lbl_total.setStringValue_(T("lbl_total", t="00:00:00"))
 
-    # ---------- 多点队列 ----------
-    @objc.python_method
-    def _read_tag(self):
-        """读标签框：去空白、限 24 字，避免列表被名字撑爆。"""
-        try:
-            return str(self.field_qtag.stringValue()).strip()[:24]
-        except Exception:
-            return ""
+    # ---------- 多点队列（NSTableView） ----------
+    _QCOLS = ("no", "tag", "x", "y", "delay", "count", "iv")
 
-    def queueAdd_(self, sender):
-        """X/Y + 次数 + 间隔入队；有选中行则插到其后（action，勿加 python_method）。"""
+    @objc.python_method
+    def _build_queue_columns(self):
+        """建列：# / 标签 / X / Y / 等待 / 次数 / 间隔。
+        宽度用原生比例分配（比例来自各列的内容量），不手算；用户可拖拽调整。"""
+        spec = [("no", T("col_no"), 0.06, 28, False),
+                ("tag", T("col_tag"), 0.20, 60, True),
+                ("x", T("col_x"), 0.13, 44, True),
+                ("y", T("col_y"), 0.13, 44, True),
+                ("delay", T("col_delay"), 0.16, 48, True),
+                ("count", T("col_count"), 0.13, 42, True),
+                ("iv", T("col_iv"), 0.19, 46, True)]
+        n = len(spec)
+        sp = float(self.queue_table.intercellSpacing().width)
+        avail = float(self.queue_table.frame().size.width) - sp * max(0, n - 1) - 4.0
+        for ident, title, ratio, minw, editable in spec:
+            col = NSTableColumn.alloc().initWithIdentifier_(ident)
+            col.setTitle_(title)
+            col.setMinWidth_(minw)
+            col.setMaxWidth_(4000)
+            col.setWidth_(max(float(minw), avail * ratio))
+            col.setResizingMask_(1 | 2)            # AutoresizingMask: 用户可调 + 跟随表格
+            col.setEditable_(editable)
+            col.headerCell().setAlignment_(2)       # 表头居中（用户明确要求）
+            self.queue_table.addTableColumn_(col)
+        # 列宽用比例初值，剩下的像素补给最后一列，表格右缘不留白
+        used = sum(float(c.width()) for c in self.queue_table.tableColumns())
+        rest = avail - used
+        if rest > 0:
+            cols = self.queue_table.tableColumns()
+            cols[-1].setWidth_(float(cols[-1].width()) + rest)
+        # 只让最后一列吸收后续宽度变化，其余列宽保持
+        self.queue_table.setColumnAutoresizingStyle_(4)
+
+    @objc.python_method
+    def _row_cells(self, row):
+        """一行要显示的值（dict），序号动态算，次数 0 显示 ∞。"""
+        q = self._queue[row]
+        c = int(q.get("count", 0) or 0)
+        return {"no": str(row + 1),
+                "tag": str(q.get("name", "") or ""),
+                "x": str(q.get("x", "")),
+                "y": str(q.get("y", "")),
+                "delay": "%g" % float(q.get("delay_ms", 0) or 0),
+                "count": ("∞" if not c else str(c)),
+                "iv": "%g" % float(q.get("interval_ms", 0) or 0)}
+
+    # ---- NSTableView 数据源 / 委托（ObjC 回调，勿加 python_method） ----
+    def numberOfRowsInTableView_(self, tv):
+        return len(getattr(self, "_queue", []) or [])
+
+    def tableView_viewForTableColumn_row_(self, tv, col, row):
+        """view-based 单元格：复用 NSTableCellView，里面一枚无边框 NSTextField。"""
         try:
-            x = int(self.field_x.stringValue())
-            y = int(self.field_y.stringValue())
-            cnt = int(self.field_qcount.stringValue() or "0")
-            iv = float(self.field_qint.stringValue() or "0")
+            ident = str(col.identifier())
+            if ident not in self._QCOLS:
+                return None
+            cell = tv.makeViewWithIdentifier_owner_(ident, self)
+            if cell is None:
+                w = float(col.width())
+                cell = NSTableCellView.alloc().initWithFrame_(NSMakeRect(0, 0, w, 18))
+                cell.setIdentifier_(ident)
+                tf = NSTextField.alloc().initWithFrame_(NSMakeRect(2, 0, w - 4, 18))
+                tf.setBordered_(False)
+                tf.setDrawsBackground_(False)
+                tf.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+                tf.setEditable_(ident != "no")
+                tf.setSelectable_(True)
+                tf.setAlignment_(2 if ident in ("no", "x", "y", "delay", "count", "iv") else 0)
+                tf.setAutoresizingMask_(2 | 16)     # 宽高随父视图
+                tf.setDelegate_(self)
+                cell.addSubview_(tf)
+                cell.setTextField_(tf)
+            tf = cell.textField()
+            vals = self._row_cells(row)
+            tf.setStringValue_(vals.get(ident, ""))
+            tf.setTag_((row + 1) * 10 + self._QCOLS.index(ident))
+            return cell
+        except Exception:
+            return None
+
+    def tableViewSelectionDidChange_(self, note):
+        """选中变化：更新标记、批量区提示；单选时回填该行数值。"""
+        try:
+            tv = self.queue_table
+            rows = tv.selectedRowIndexes()
+            n = rows.count()
+            self._queue_sel = tv.selectedRow() if tv.selectedRow() >= 0 else None
+            self.lbl_selinfo.setStringValue_(T("lbl_sel_n", n=n) if n else T("lbl_sel_0"))
+            self.btn_bapply.setEnabled_(n > 0)
+            if n == 1 and self._queue_sel is not None and 0 <= self._queue_sel < len(self._queue):
+                q = self._queue[self._queue_sel]
+                self.field_bcount.setStringValue_(str(int(q.get("count", 0) or 0)))
+                self.field_bint.setStringValue_("%g" % float(q.get("interval_ms", 0) or 0))
+                self.field_bdelay.setStringValue_("%g" % float(q.get("delay_ms", 0) or 0))
+        except Exception:
+            pass
+
+    def controlTextDidEndEditing_(self, note):
+        """单元格编辑提交：按 tag 还原出 (行, 列) 再校验写回。"""
+        try:
+            tf = note.object()
+            tag = int(tf.tag())
+            if tag < 10:
+                return
+            row, cidx = divmod(tag, 10)
+            row -= 1
+            if not (0 <= cidx < len(self._QCOLS)):
+                return
+            key = self._QCOLS[cidx]
+            if key == "no" or not (0 <= row < len(self._queue)):
+                return
+            self._commit_cell(row, key, str(tf.stringValue()))
+        except Exception:
+            pass
+
+    def queueTableDoubleClick_(self, sender):
+        """双击 → 该格进入编辑态。"""
+        try:
+            r, c = sender.clickedRow(), sender.clickedColumn()
+            if r < 0 or c < 0:
+                return
+            ident = str(sender.tableColumns().objectAtIndex_(c).identifier())
+            if ident == "no":
+                return
+            sender.editColumn_row_withEvent_select_(c, r, None, True)
+        except Exception:
+            pass
+
+    # ---- 拖拽换序 ----
+    def tableView_writeRowsWithIndexes_toPasteboard_(self, tv, rows, pb):
+        try:
+            data = [int(i) for i in rows]
+            pb.declareTypes_owner_(["public.utf8-plain-text"], None)
+            pb.setString_forType_(json.dumps(data), "public.utf8-plain-text")
+            return True
+        except Exception:
+            return False
+
+    def tableView_validateDrop_proposedRow_proposedDropOperation_(self, tv, info, row, op):
+        return 16 if getattr(self, "_queue", None) else 0     # Move / None
+
+    def tableView_acceptDrop_row_dropOperation_(self, tv, info, row, op):
+        try:
+            src = json.loads(info.draggingPasteboard().stringForType_("public.utf8-plain-text") or "[]")
+            return self._move_rows(src, row)
+        except Exception:
+            return False
+
+    @objc.python_method
+    def _move_rows(self, src, row):
+        """把 src 行整体移动到 row 位置（row 为插入点，按剩余行计）。"""
+        src = [i for i in src if 0 <= i < len(self._queue)]
+        if not src:
+            return False
+        first = src[0]
+        items = [self._queue[i] for i in src]
+        for i in sorted(src, reverse=True):
+            self._queue.pop(i)
+        target = row - sum(1 for i in src if i < row)
+        target = max(0, min(target, len(self._queue)))
+        for k, it in enumerate(items):
+            self._queue.insert(target + k, it)
+        self._save_queue(self._queue)
+        self._reload_queue_table(keep_selection=list(range(target, target + len(items))))
+        self.add_log(T("log_q_move", i=first + 1, j=target + 1))
+        return True
+
+    # ---- 单元格写回 ----
+    @objc.python_method
+    def _commit_cell(self, row, key, text):
+        """单元格写回：key 是列标识（tag/delay/iv/count/x/y），落到对应数据字段。"""
+        fld = {"tag": "name", "delay": "delay_ms", "iv": "interval_ms"}.get(key, key)
+        q = self._queue[row]
+        old = q.get(fld)
+        text = (text or "").strip()
+        try:
+            if key == "tag":
+                val = text[:24]
+            elif key in ("x", "y"):
+                val = int(float(text))
+                if not (-100000 <= val <= 100000):
+                    raise ValueError
+            elif key == "count":
+                val = int(float(text or "0"))
+                if not (0 <= val <= 1000000):
+                    raise ValueError
+            elif key == "delay":
+                val = float(text or "0")
+                if not (0 <= val <= 600000):
+                    raise ValueError
+            elif key == "iv":
+                val = float(text or "0")
+                if not (0 <= val <= 600000):
+                    raise ValueError
+            else:
+                return
+        except Exception:
+            self.add_log(T("err_cell_bad", f=key, v=text))
+            self._reload_queue_table()
+            return
+        if key in ("iv", "delay"):
+            same = abs(float(val) - float(old or 0)) < 1e-9
+        else:
+            same = (val == old)
+        if same:
+            return
+        q[fld] = val
+        self._save_queue(self._queue)
+        self._reload_queue_table()
+        self.add_log(T("log_row_edit", i=row + 1, f=key, a=old, b=val))
+
+    # ---- 选中 / 批量 ----
+    @objc.python_method
+    def _selected_rows(self):
+        try:
+            return [int(i) for i in self.queue_table.selectedRowIndexes()]
+        except Exception:
+            return []
+
+    def selectAllRows_(self, sender):
+        try:
+            self.queue_table.selectAll_(None)
+        except Exception:
+            pass
+
+    def applyBatch_(self, sender):
+        """把批量区的次数/间隔套到所有选中行（action）。"""
+        rows = self._selected_rows()
+        if not rows:
+            self.show_alert(T("alert_notice"), T("err_sel_none"))
+            return
+        try:
+            cnt = int(float(self.field_bcount.stringValue() or "0"))
+            iv = float(self.field_bint.stringValue() or "0")
+            dly = float(self.field_bdelay.stringValue() or "0")
         except Exception:
             self.show_alert(T("alert_bad"), T("msg_coordnum"))
             return
-        if cnt < 0 or iv < 0:
+        if not (0 <= cnt <= 1000000) or not (0 <= iv <= 600000) or not (0 <= dly <= 600000):
             self.show_alert(T("alert_bad"), T("err_interval"))
+            return
+        for i in rows:
+            if 0 <= i < len(self._queue):
+                self._queue[i]["count"] = cnt
+                self._queue[i]["interval_ms"] = iv
+                self._queue[i]["delay_ms"] = dly
+        self._save_queue(self._queue)
+        self._reload_queue_table(keep_selection=rows)
+        self.add_log(T("log_q_batch", n=len(rows), c=("∞" if not cnt else cnt),
+                       ms="%g / 等待 %g" % (iv, dly)))
+
+    @objc.python_method
+    def _batch_vals(self):
+        """读批量区的次数/间隔（也作为「加入」新点时的默认值）。"""
+        try:
+            cnt = int(float(self.field_bcount.stringValue() or "0"))
+            iv = float(self.field_bint.stringValue() or "0")
+            dly = float(self.field_bdelay.stringValue() or "0")
+        except Exception:
+            cnt, iv, dly = 1, 100.0, 0.0
+        cnt = max(0, min(cnt, 1000000))
+        iv = max(0.0, min(iv, 600000.0))
+        dly = max(0.0, min(dly, 600000.0))
+        return cnt, iv, dly
+
+    def queueAdd_(self, sender):
+        """X/Y 入队（次数/间隔取批量区值）；有选中行则插到其后（action）。"""
+        try:
+            x = int(self.field_x.stringValue())
+            y = int(self.field_y.stringValue())
+        except Exception:
+            self.show_alert(T("alert_bad"), T("msg_coordnum"))
             return
         if len(getattr(self, "_queue", [])) >= 200:
             self.show_alert(T("alert_notice"), T("err_count", n=200))
             return
-        tag = self._read_tag()
-        item = {"x": x, "y": y, "count": cnt, "interval_ms": iv, "name": tag}
+        cnt, iv, dly = self._batch_vals()
+        item = {"x": x, "y": y, "count": cnt, "interval_ms": iv,
+                "delay_ms": dly, "name": ""}
         sel = getattr(self, "_queue_sel", None)
         if sel is not None and 0 <= sel < len(self._queue):
-            self._queue.insert(sel + 1, item)       # 插到选中行之后
-            idx = sel + 2
-            self._queue_sel = idx - 1
+            self._queue.insert(sel + 1, item)
+            pos = sel + 1
             key = "log_queue_ins"
         else:
             self._queue.append(item)
-            idx = len(self._queue)
+            pos = len(self._queue) - 1
             key = "log_queue_add"
         self._save_queue(self._queue)
-        self._refresh_queue_view()
-        self.add_log(T(key, i=idx, x=x, y=y,
-                       n=("∞" if not cnt else cnt), ms=("%g" % iv)))
+        self._reload_queue_table(keep_selection=[pos])
+        self.add_log(T(key, i=pos + 1, x=x, y=y,
+                       n=("∞" if not cnt else cnt), ms="%g / 等待 %g" % (iv, dly)))
 
-    def queueSaveRow_(self, sender):
-        """用编辑栏的值覆盖选中行（action）。"""
+    def queueDup_(self, sender):
+        """复制选中行（同坐标同参数），插在原行之后（action）。"""
         sel = getattr(self, "_queue_sel", None)
         if sel is None or not (0 <= sel < len(getattr(self, "_queue", []))):
             self.show_alert(T("alert_notice"), T("err_select_row"))
             return
-        try:
-            x = int(self.field_x.stringValue())
-            y = int(self.field_y.stringValue())
-            cnt = int(self.field_qcount.stringValue() or "0")
-            iv = float(self.field_qint.stringValue() or "0")
-        except Exception:
-            self.show_alert(T("alert_bad"), T("msg_coordnum"))
-            return
-        if cnt < 0 or iv < 0:
-            self.show_alert(T("alert_bad"), T("err_interval"))
-            return
-        self._queue[sel] = {"x": x, "y": y, "count": cnt, "interval_ms": iv,
-                            "name": self._read_tag()}
+        self._queue.insert(sel + 1, dict(self._queue[sel]))
         self._save_queue(self._queue)
-        self._refresh_queue_view()
-        self.add_log(T("log_queue_save", i=sel + 1, x=x, y=y,
-                       n=("∞" if not cnt else cnt), ms=("%g" % iv)))
+        self._reload_queue_table(keep_selection=[sel + 1])
+        self.add_log(T("log_q_dup", i=sel + 1))
 
     def queueDel_(self, sender):
-        """删除选中行；没选中则删末项（action）。"""
+        """删除所有选中行；没选中则删末项（action）。"""
         if not getattr(self, "_queue", None):
             return
-        sel = getattr(self, "_queue_sel", None)
-        if sel is not None and 0 <= sel < len(self._queue):
-            self._queue.pop(sel)
-            self._queue_sel = None
+        rows = self._selected_rows()
+        if rows:
+            first = rows[0]
+            for i in sorted(rows, reverse=True):
+                if 0 <= i < len(self._queue):
+                    self._queue.pop(i)
             self._save_queue(self._queue)
-            self._refresh_queue_view()
-            self.add_log(T("log_queue_del_row", i=sel + 1))
+            self._reload_queue_table()
+            if len(rows) == 1:
+                self.add_log(T("log_queue_del_row", i=first + 1))
+            else:
+                self.add_log(T("log_q_batch_del", n=len(rows)))
             return
         self._queue.pop()
         self._queue_sel = None
         self._save_queue(self._queue)
-        self._refresh_queue_view()
+        self._reload_queue_table()
         self.add_log(T("log_queue_del"))
 
     def queueClear_(self, sender):
@@ -1792,37 +2487,8 @@ class AppDelegate(NSObject):
         self._queue = []
         self._queue_sel = None
         self._save_queue([])
-        self._refresh_queue_view()
+        self._reload_queue_table()
         self.add_log(T("log_queue_clear"))
-
-    def textViewDidChangeSelection_(self, note):
-        """列表选中行变化 → 载入编辑栏（ObjC delegate 回调，勿加 python_method）。"""
-        try:
-            if getattr(self, "_suppress_sel", False):
-                return
-            tv = note.object()
-            if tv is None or tv != getattr(self, "queue_view", None):
-                return
-            if self.window.firstResponder() != tv:
-                return
-            rng = tv.selectedRange()
-            line = tv.string()[:rng.location].count("\n")
-            if not self._queue or line >= len(self._queue):
-                return
-            self._queue_sel = line
-            q = self._queue[line]
-            self.field_x.setStringValue_(str(q.get("x", "")))
-            self.field_y.setStringValue_(str(q.get("y", "")))
-            self.field_qcount.setStringValue_(str(int(q.get("count", 0) or 0)))
-            self.field_qint.setStringValue_("%g" % float(q.get("interval_ms", 0) or 0))
-            self.field_qtag.setStringValue_(str(q.get("name", "") or ""))
-            self.btn_qsave.setEnabled_(True)
-            if getattr(self, "_queue_sel", None) != line:
-                self._queue_sel = line
-                self._refresh_queue_view()
-        except Exception:
-            pass
-            pass
 
     # ---------- 连采（连续记录真实点击） ----------
     def record_(self, sender):
@@ -1927,7 +2593,8 @@ class AppDelegate(NSObject):
         gap = 0.0 if self._rec_last_ts is None else max(0.0, (now - self._rec_last_ts) * 1000.0)
         if self._rec_points:
             self._rec_points[-1]["interval_ms"] = round(gap, 1)   # 回填上一项的真实等待
-        self._rec_points.append({"x": int(x), "y": int(y), "count": 1, "interval_ms": 100.0})
+        self._rec_points.append({"x": int(x), "y": int(y), "count": 1,
+                                 "interval_ms": 100.0, "delay_ms": 0.0})
         self._rec_last_ts = now
         self.lbl_pick.setStringValue_(T("lbl_rec_n", n=len(self._rec_points)))
         if len(self._rec_points) >= 200:
@@ -1966,37 +2633,42 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _refresh_queue_view(self):
-        if getattr(self, "queue_view", None) is None:
+        """兼容旧调用点：统一转到表格刷新。"""
+        self._reload_queue_table()
+
+    @objc.python_method
+    def _reload_queue_table(self, keep_selection=None):
+        """重载表格数据；keep_selection 给行号列表则重新选中它们。"""
+        tv = getattr(self, "queue_table", None)
+        if tv is None:
             return
         if not getattr(self, "_queue", None):
             self._queue_sel = None
-            self._suppress_sel = True
-            try:
-                self.queue_view.setString_(T("que_empty"))
-            finally:
-                self._suppress_sel = False
-            if getattr(self, "btn_qsave", None) is not None:
-                self.btn_qsave.setEnabled_(False)
-            return
-        sel = getattr(self, "_queue_sel", None)
-        if sel is not None and sel >= len(self._queue):
-            sel = self._queue_sel = len(self._queue) - 1
-        lines = []
-        for i, q in enumerate(self._queue):
-            c = int(q.get("count", 0) or 0)
-            mark = "❯ " if i == sel else "  "
-            tag = str(q.get("name", "") or "").strip()
-            tag_s = (tag + " ") if tag else ""
-            lines.append("%s%d. %s(%d, %d)  ×%s  %gms" % (
-                mark, i + 1, tag_s, q["x"], q["y"], ("∞" if not c else c),
-                float(q.get("interval_ms", 0) or 0)))
-        self._suppress_sel = True
+        tv.reloadData()
         try:
-            self.queue_view.setString_("\n".join(lines))
-        finally:
-            self._suppress_sel = False
-        if getattr(self, "btn_qsave", None) is not None:
-            self.btn_qsave.setEnabled_(sel is not None)
+            if keep_selection:
+                ms = NSMutableIndexSet.alloc().init()
+                for i in keep_selection:
+                    if 0 <= i < len(self._queue):
+                        ms.addIndex_(i)
+                tv.selectRowIndexes_byExtendingSelection_(ms, False)
+                first = min(keep_selection) if keep_selection else -1
+                if 0 <= first < len(self._queue):
+                    tv.scrollRowToVisible_(first)
+            else:
+                tv.deselectAll_(None)
+        except Exception:
+            pass
+        # 拖动后 / 编辑后都刷新一次选中提示
+        try:
+            n = tv.selectedRowIndexes().count()
+            self._queue_sel = tv.selectedRow() if tv.selectedRow() >= 0 else None
+            if getattr(self, "lbl_selinfo", None) is not None:
+                self.lbl_selinfo.setStringValue_(T("lbl_sel_n", n=n) if n else T("lbl_sel_0"))
+            if getattr(self, "btn_bapply", None) is not None:
+                self.btn_bapply.setEnabled_(n > 0)
+        except Exception:
+            pass
 
     @objc.python_method
     def _save_queue(self, q):
@@ -2012,6 +2684,7 @@ class AppDelegate(NSObject):
             out.append({"x": int(q.get("x", 0)), "y": int(q.get("y", 0)),
                         "count": int(q.get("count", 0) or 0),
                         "interval_ms": float(q.get("interval_ms", 0) or 0),
+                        "delay_ms": float(q.get("delay_ms", 0) or 0),
                         "name": str(q.get("name", "") or "")})
         return out
 
