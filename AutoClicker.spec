@@ -47,9 +47,9 @@ app = BUNDLE(
     name='AutoClicker.app',
     icon='assets/AutoClicker.icns',
     bundle_identifier='com.bingostudio.autoclicker',
-    version='0.7.0',
+    version='0.8.0',
     info_plist={
-        'CFBundleShortVersionString': '0.7.0',
-        'CFBundleVersion': '0.7.0',
+        'CFBundleShortVersionString': '0.8.0',
+        'CFBundleVersion': '0.8.0',
     },
 )

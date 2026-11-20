@@ -1,6 +1,6 @@
 # AutoClicker —— macOS 自动点击器（AppKit 原生界面）
 
-> **v0.7.0**（正式版）
+> **v0.8.0**（正式版）
 >
 > **Bingo Studio** · wljimmy@hotmail.com
 > 本项目由 wljimmy 使用豆包 AI 完成
