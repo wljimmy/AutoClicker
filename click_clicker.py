@@ -17,6 +17,7 @@ Bingo Studio · wljimmy@hotmail.com
 """
 
 import os
+import sys
 import time
 import json
 import threading
@@ -34,7 +35,7 @@ from AppKit import (
     NSApplicationActivationPolicyRegular,
     NSAlert, NSWorkspace, NSBox, NSAlertFirstButtonReturn,
     NSEvent, NSCommandKeyMask, NSShiftKeyMask,
-    NSEventMaskKeyDown, NSEventMaskMouseMoved,
+    NSEventMaskKeyDown, NSEventMaskMouseMoved, NSLeftMouseDownMask,
     NSMutableAttributedString, NSForegroundColorAttributeName,
     NSFontAttributeName,
     NSLineBreakByWordWrapping,
@@ -80,16 +81,30 @@ STOP_KEYCODE_F9 = 99          # 兜底：F9 单键也能停
 # ---- 防呆 / 逃生机制 ----
 MAX_RUNTIME_SEC = 3600        # 硬性最长运行 60 分钟，杜绝超长任务锁死电脑
 MAX_COUNT = 1_000_000         # 单次最多点击次数上限
-STOP_FLAG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop.flag")
+def _data_dir():
+    """数据目录：源码运行=脚本所在目录；打包运行=~/Library/Application Support/AutoClicker（apps 包内不可持久）。"""
+    if getattr(sys, "frozen", False):
+        d = os.path.expanduser("~/Library/Application Support/AutoClicker")
+    else:
+        d = os.path.dirname(os.path.abspath(__file__))
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
 
-VERSION = "0.5.0"   # 版本号：UI 副标题 + 关于面板展示
+
+DATA_DIR = _data_dir()
+STOP_FLAG = os.path.join(DATA_DIR, "stop.flag")
+
+VERSION = "0.6.0"   # 版本号：UI 副标题 + 关于面板展示
 GITHUB_URL = "https://github.com/wljimmy/AutoClicker"
 # 版权三行（verbatim，用户锁定）
 COPYRIGHT_1 = "Bingo Studio"
 COPYRIGHT_2 = "wljimmy@hotmail.com"
 COPYRIGHT_3 = "本项目是由wljimmy使用doubao AI完成"
-SAVED_COORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_coords.json")
-MULTI_POINTS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multi_points.json")
+SAVED_COORDS_PATH = os.path.join(DATA_DIR, "saved_coords.json")
+MULTI_POINTS_PATH = os.path.join(DATA_DIR, "multi_points.json")
 
 # ---- 鼠标晃动打断检测（打断性晃动 = 2 秒内 ≥3 次来回，每段 ≥200px） ----
 SWING_MIN_DIST = 200.0        # 相邻两个方向顶点之间最小距离(px)，>= 才算一次晃动段
@@ -116,25 +131,30 @@ I18N = {
     "lbl_int":     {"zh": "间隔(ms):", "en": "Interval(ms):"},
     "tip_interval": {"zh": "越小越快 · 游戏约 50 次/秒有效",
                      "en": "Smaller = Faster · ~50/s effective"},
-    "btn_pick":    {"zh": "📌 拾取坐标 (5s)", "en": "📌 Pick (5s)"},
-    "btn_test":    {"zh": "🎯 测试坐标", "en": "🎯 Test"},
+    "btn_pick":    {"zh": "📌 拾取 (5s)", "en": "📌 Pick (5s)"},
+    "btn_test":    {"zh": "🎯 测试", "en": "🎯 Test"},
+    "btn_rec":     {"zh": "🎯 连采", "en": "🎯 Record"},
+    "btn_rec_stop": {"zh": "⏹ 停止采集", "en": "⏹ Stop Rec"},
     "tip_pick_tt": {"zh": "点击后 5 秒倒计时，结束时读取鼠标位置并填入坐标框",
                     "en": "5s countdown then read mouse pos"},
     "tip_test_tt": {"zh": "在坐标框当前位置执行一次点击，校验坐标是否准确",
                     "en": "click once at coords"},
-    "lbl_pick_ready": {"zh": "倒计时：就绪（点后把鼠标移到目标点）",
-                       "en": "Countdown: Ready (move mouse to target)"},
+    "tip_rec_tt":  {"zh": "在目标窗口里连续点击，自动按点击顺序与时间差生成队列（只监听不拦截）",
+                    "en": "Click in the target app; builds the queue from order + gaps (listen-only)"},
+    "lbl_pick_ready": {"zh": "就绪：拾取=5秒取点 · 连采=连续记录点击",
+                       "en": "Ready: Pick=5s sample · Record=capture clicks"},
     # ---- ④ 多点队列 / 静音 / 倒计时 ----
     "grp4":         {"zh": "④ 多点队列", "en": "④ Multi-Point Queue"},
-    "btn_qadd":     {"zh": "➕ 加入队列", "en": "➕ Add to Queue"},
-    "btn_qdel":     {"zh": "🗑 删末项", "en": "🗑 Del Last"},
+    "btn_qadd":     {"zh": "➕ 加入", "en": "➕ Add"},
+    "btn_qsave":    {"zh": "💾 保存行", "en": "💾 Save Row"},
+    "btn_qdel":     {"zh": "🗑 删除", "en": "🗑 Delete"},
     "btn_qclear":   {"zh": "清空", "en": "Clear"},
     "lbl_qcount":   {"zh": "次数:", "en": "Times:"},
     "lbl_qint":     {"zh": "间隔(ms):", "en": "Gap(ms):"},
-    "tip_queue":    {"zh": "坐标取上方 X/Y；次数=0 表示一直点；每轮按顺序点完整个队列再循环",
-                     "en": "Uses X/Y above; Times=0 = forever; one pass = one round"},
-    "que_empty":    {"zh": "队列为空。格式：序号 (X, Y) ×次数 间隔ms",
-                     "en": "Queue empty. Row: # (X, Y) ×times gap ms"},
+    "tip_queue":    {"zh": "点一行载入下方编辑→保存行；次数=0=一直点；每轮点完整队列再循环",
+                     "en": "Click a row to edit it; Times=0=forever; one pass=one round"},
+    "que_empty":    {"zh": "队列为空：拾取→加入，或点『🎯 连采』连续记录点击",
+                     "en": "Queue empty — pick & add, or hit 🎯 Record"},
     "mode_queue":   {"zh": "多点队列(按时长)", "en": "Multi-Point (by duration)"},
     "chk_mute":     {"zh": "静音提示音", "en": "Mute beeps"},
     "lbl_elapsed":  {"zh": "已过 {t}", "en": "Elapsed {t}"},
@@ -146,6 +166,21 @@ I18N = {
                       "en": "➕ Queue #{i}: ({x}, {y}) ×{n}, gap {ms}ms"},
     "log_queue_del": {"zh": "🗑 已删除队列末项", "en": "🗑 Removed last item"},
     "log_queue_clear": {"zh": "🗑 队列已清空", "en": "🗑 Queue cleared"},
+    "log_queue_save": {"zh": "💾 第 {i} 行已更新：({x}, {y}) ×{n} 间隔 {ms}ms",
+                       "en": "💾 Row {i} saved: ({x}, {y}) ×{n} gap {ms}ms"},
+    "log_queue_ins": {"zh": "➕ 第 {i} 行（插在选中行后）：({x}, {y}) ×{n} 间隔 {ms}ms",
+                      "en": "➕ Inserted row {i}: ({x}, {y}) ×{n} gap {ms}ms"},
+    "log_queue_del_row": {"zh": "🗑 已删除第 {i} 行", "en": "🗑 Deleted row {i}"},
+    "lbl_rec_n": {"zh": "采集中… 已记录 {n} 点（去目标窗口点）",
+                  "en": "Recording… {n} pts (click in target app)"},
+    "err_rec_running": {"zh": "正在连采，先结束采集再开始执行",
+                        "en": "Recording active — stop it first"},
+    "log_rec_start": {"zh": "🎯 连采开始：去目标窗口正常点击，F9 / ⌘⇧X 或回到本窗口结束",
+                      "en": "🎯 Recording — click in target app; F9 / ⌘⇧X or return here"},
+    "log_rec_done": {"zh": "🎯 连采结束：新增 {n} 项，队列共 {t} 项（间隔按点击时间差自动填）",
+                     "en": "🎯 Recorded {n} points; queue now {t} (gap = click delta)"},
+    "log_rec_none": {"zh": "🎯 连采结束：没有记录到任何点击", "en": "🎯 Recording ended: no clicks"},
+    "err_select_row": {"zh": "先在上方列表里点选一行", "en": "Pick a row in the list first"},
     "log_mute":     {"zh": "🔇 提示音已静音", "en": "🔇 Beeps muted"},
     "log_unmute":   {"zh": "🔊 提示音已恢复", "en": "🔊 Beeps on"},
     # ---- ② 运行设置 ----
@@ -486,6 +521,13 @@ class HotkeyListener:
         return event
 
     def _trigger_stop(self):
+        hook = getattr(self, "on_stop", None)
+        if hook is not None:
+            try:
+                if hook():
+                    return
+            except Exception:
+                pass
         w = self.get_worker()
         if w is not None:
             w.add_log(T("log_hotkey"))
@@ -499,6 +541,11 @@ class AppDelegate(NSObject):
         self.log_view = None
         self._beep_snd = None   # 倒计时"滴"音效缓存实例
         self.muted = False      # 提示音静音开关（复选框控制）
+        # ---- 连采状态 ----
+        self.recording = False
+        self._rec_mon = None
+        self._rec_points = []
+        self._rec_last_ts = None
         # ---- 鼠标晃动打断状态机初始状态 ----
         self._int_state = "idle"            # idle | paused_wait | dialog
         self._last_move_ts = 0.0
@@ -511,12 +558,15 @@ class AppDelegate(NSObject):
         self._mouse_mon = None
         self.build_ui()
         # 全局热键
-        HotkeyListener(lambda: self.worker).start()
+        self.hotkey = HotkeyListener(lambda: self.worker)
+        self.hotkey.on_stop = self._hotkey_stop_hook
+        self.hotkey.start()
         # 定时刷新 UI
         NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.3, self, objc.selector(self.refresh_), None, True)
         self.add_log(T("log_ready"))
         self.check_accessibility()
+
         # 逃生通道③：真实鼠标移动即停（键盘被游戏抢走时，动一下鼠标就能夺回控制权）
         try:
             self._mouse_mon = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
@@ -783,13 +833,17 @@ class AppDelegate(NSObject):
         keep(self.field_interval, None)
         keep(self._multiline_label(T("tip_interval"), 438, 736, 154, 40, font_size=9), "tip_interval")
 
-        self.btn_pick = self._button(T("btn_pick"), 16, 706, 176, 34, self.pick_)
+        self.btn_pick = self._button(T("btn_pick"), 16, 706, 148, 34, self.pick_)
         self.btn_pick.setToolTip_(T("tip_pick_tt"))
         keep(self.btn_pick, "btn_pick")
-        self.btn_test_pos = self._button(T("btn_test"), 200, 706, 140, 34, self.testPos_)
+        self.btn_test_pos = self._button(T("btn_test"), 170, 706, 100, 34, self.testPos_)
         self.btn_test_pos.setToolTip_(T("tip_test_tt"))
         keep(self.btn_test_pos, "btn_test")
-        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 350, 701, 240, 40, font_size=10)
+        # 连采：连续记录在其他窗口的真实点击，直接生成队列
+        self.btn_rec = self._button(T("btn_rec"), 276, 706, 116, 34, self.record_)
+        self.btn_rec.setToolTip_(T("tip_rec_tt"))
+        keep(self.btn_rec, "btn_rec")
+        self.lbl_pick = self._multiline_label(T("lbl_pick_ready"), 398, 701, 186, 40, font_size=10)
         keep(self.lbl_pick, "lbl_pick_ready")
 
         # ---- 坐标保存行 ----
@@ -820,20 +874,24 @@ class AppDelegate(NSObject):
         self.queue_view.setBackgroundColor_(NSColor.textBackgroundColor())
         self.queue_view.setTextColor_(NSColor.textColor())
         self.queue_view.setTextContainerInset_((4, 6))
+        self.queue_view.setDelegate_(self)   # 选中行 → textViewDidChangeSelection_ 载入编辑栏
         qscroll.setDocumentView_(self.queue_view)
         content.addSubview_(qscroll)
 
-        keep(self._label(T("lbl_qcount"), 16, 490, 54, 24), "lbl_qcount")
-        self.field_qcount = self._input("1", 74, 490, 58, 26)
+        keep(self._label(T("lbl_qcount"), 16, 490, 40, 24), "lbl_qcount")
+        self.field_qcount = self._input("1", 56, 490, 50, 26)
         content.addSubview_(self.field_qcount)
-        keep(self._label(T("lbl_qint"), 136, 490, 70, 24), "lbl_qint")
-        self.field_qint = self._input("100", 210, 490, 64, 26)
+        keep(self._label(T("lbl_qint"), 112, 490, 56, 24), "lbl_qint")
+        self.field_qint = self._input("100", 168, 490, 56, 26)
         content.addSubview_(self.field_qint)
-        self.btn_qadd = self._button(T("btn_qadd"), 272, 488, 140, 30, self.queueAdd_)
+        self.btn_qadd = self._button(T("btn_qadd"), 230, 488, 104, 30, self.queueAdd_)
         keep(self.btn_qadd, "btn_qadd")
-        self.btn_qdel = self._button(T("btn_qdel"), 416, 488, 96, 30, self.queueDel_)
+        self.btn_qsave = self._button(T("btn_qsave"), 340, 488, 90, 30, self.queueSaveRow_)
+        self.btn_qsave.setEnabled_(False)
+        keep(self.btn_qsave, "btn_qsave")
+        self.btn_qdel = self._button(T("btn_qdel"), 436, 488, 74, 30, self.queueDel_)
         keep(self.btn_qdel, "btn_qdel")
-        self.btn_qclear = self._button(T("btn_qclear"), 512, 488, 72, 30, self.queueClear_)
+        self.btn_qclear = self._button(T("btn_qclear"), 516, 488, 68, 30, self.queueClear_)
         keep(self.btn_qclear, "btn_qclear")
         keep(self._multiline_label(T("tip_queue"), 16, 464, 568, 18, font_size=9), "tip_queue")
         content.addSubview_(self._separator(16, 458, 568))
@@ -900,6 +958,7 @@ class AppDelegate(NSObject):
         content.addSubview_(scroll)
 
         self._queue = self._load_queue()
+        self._queue_sel = None      # 当前选中行（None=未选）
         self._refresh_queue_view()
         self.window.makeKeyAndOrderFront_(None)
         try:
@@ -1135,6 +1194,9 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _start(self, mode_override, duration_override):
+        if getattr(self, "recording", False):
+            self.show_alert(T("alert_notice"), T("err_rec_running"))
+            return
         if self.worker is not None and self.worker.running:
             self.show_alert(T("alert_notice"), T("msg_already"))
             return
@@ -1257,6 +1319,11 @@ class AppDelegate(NSObject):
     def _set_running(self, running):
         self.btn_start.setEnabled_(not running)
         self.btn_test.setEnabled_(not running)
+        try:
+            if getattr(self, "btn_rec", None) is not None:
+                self.btn_rec.setEnabled_(not running)
+        except Exception:
+            pass
         self.btn_stop.setEnabled_(running)
         self.lbl_status.setStringValue_(T("status_run") if running else T("status_idle"))
         if running:
@@ -1266,7 +1333,7 @@ class AppDelegate(NSObject):
 
     # ---------- 多点队列 ----------
     def queueAdd_(self, sender):
-        """把坐标框的 X/Y + 次数 + 间隔加入队列（action，勿加 @objc.python_method）。"""
+        """X/Y + 次数 + 间隔入队；有选中行则插到其后（action，勿加 python_method）。"""
         try:
             x = int(self.field_x.stringValue())
             y = int(self.field_y.stringValue())
@@ -1281,26 +1348,233 @@ class AppDelegate(NSObject):
         if len(getattr(self, "_queue", [])) >= 200:
             self.show_alert(T("alert_notice"), T("err_count", n=200))
             return
-        self._queue.append({"x": x, "y": y, "count": cnt, "interval_ms": iv})
+        item = {"x": x, "y": y, "count": cnt, "interval_ms": iv}
+        sel = getattr(self, "_queue_sel", None)
+        if sel is not None and 0 <= sel < len(self._queue):
+            self._queue.insert(sel + 1, item)       # 插到选中行之后
+            idx = sel + 2
+            self._queue_sel = idx - 1
+            key = "log_queue_ins"
+        else:
+            self._queue.append(item)
+            idx = len(self._queue)
+            key = "log_queue_add"
         self._save_queue(self._queue)
         self._refresh_queue_view()
-        self.add_log(T("log_queue_add", i=len(self._queue), x=x, y=y,
+        self.add_log(T(key, i=idx, x=x, y=y,
+                       n=("∞" if not cnt else cnt), ms=("%g" % iv)))
+
+    def queueSaveRow_(self, sender):
+        """用编辑栏的值覆盖选中行（action）。"""
+        sel = getattr(self, "_queue_sel", None)
+        if sel is None or not (0 <= sel < len(getattr(self, "_queue", []))):
+            self.show_alert(T("alert_notice"), T("err_select_row"))
+            return
+        try:
+            x = int(self.field_x.stringValue())
+            y = int(self.field_y.stringValue())
+            cnt = int(self.field_qcount.stringValue() or "0")
+            iv = float(self.field_qint.stringValue() or "0")
+        except Exception:
+            self.show_alert(T("alert_bad"), T("msg_coordnum"))
+            return
+        if cnt < 0 or iv < 0:
+            self.show_alert(T("alert_bad"), T("err_interval"))
+            return
+        self._queue[sel] = {"x": x, "y": y, "count": cnt, "interval_ms": iv}
+        self._save_queue(self._queue)
+        self._refresh_queue_view()
+        self.add_log(T("log_queue_save", i=sel + 1, x=x, y=y,
                        n=("∞" if not cnt else cnt), ms=("%g" % iv)))
 
     def queueDel_(self, sender):
-        """删除队列末项（action）。"""
-        if getattr(self, "_queue", None):
-            self._queue.pop()
+        """删除选中行；没选中则删末项（action）。"""
+        if not getattr(self, "_queue", None):
+            return
+        sel = getattr(self, "_queue_sel", None)
+        if sel is not None and 0 <= sel < len(self._queue):
+            self._queue.pop(sel)
+            self._queue_sel = None
             self._save_queue(self._queue)
             self._refresh_queue_view()
-            self.add_log(T("log_queue_del"))
+            self.add_log(T("log_queue_del_row", i=sel + 1))
+            return
+        self._queue.pop()
+        self._queue_sel = None
+        self._save_queue(self._queue)
+        self._refresh_queue_view()
+        self.add_log(T("log_queue_del"))
 
     def queueClear_(self, sender):
         """清空队列（action）。"""
         self._queue = []
+        self._queue_sel = None
         self._save_queue([])
         self._refresh_queue_view()
         self.add_log(T("log_queue_clear"))
+
+    def textViewDidChangeSelection_(self, note):
+        """列表选中行变化 → 载入编辑栏（ObjC delegate 回调，勿加 python_method）。"""
+        try:
+            if getattr(self, "_suppress_sel", False):
+                return
+            tv = note.object()
+            if tv is None or tv != getattr(self, "queue_view", None):
+                return
+            if self.window.firstResponder() != tv:
+                return
+            rng = tv.selectedRange()
+            line = tv.string()[:rng.location].count("\n")
+            if not self._queue or line >= len(self._queue):
+                return
+            self._queue_sel = line
+            q = self._queue[line]
+            self.field_x.setStringValue_(str(q.get("x", "")))
+            self.field_y.setStringValue_(str(q.get("y", "")))
+            self.field_qcount.setStringValue_(str(int(q.get("count", 0) or 0)))
+            self.field_qint.setStringValue_("%g" % float(q.get("interval_ms", 0) or 0))
+            self.btn_qsave.setEnabled_(True)
+            if getattr(self, "_queue_sel", None) != line:
+                self._queue_sel = line
+                self._refresh_queue_view()
+        except Exception:
+            pass
+            pass
+
+    # ---------- 连采（连续记录真实点击） ----------
+    def record_(self, sender):
+        """连采按钮（action）：开始 / 结束。"""
+        if getattr(self, "recording", False):
+            self._stop_recording("button")
+        else:
+            self._start_recording()
+
+    @objc.python_method
+    def _start_recording(self):
+        if getattr(self, "recording", False):
+            return
+        if not HAVE_QUARTZ:
+            self.show_alert(T("alert_error"), T("msg_noquartz"))
+            return
+        if self.worker is not None and self.worker.running:
+            self.show_alert(T("alert_notice"), T("msg_already"))
+            return
+        if len(getattr(self, "_queue", [])) >= 200:
+            self.show_alert(T("alert_notice"), T("err_count", n=200))
+            return
+        self.recording = True
+        self._rec_points = []
+        self._rec_last_ts = None
+        try:
+            self._rec_mon = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+                NSLeftMouseDownMask, self._rec_handler)
+        except Exception:
+            self._rec_mon = None
+        if self._rec_mon is None:
+            self.recording = False
+            self.show_alert(T("alert_perm"), T("msg_perm"))
+            return
+        self.btn_rec.setTitle_(T("btn_rec_stop"))
+        self.btn_pick.setEnabled_(False)
+        self.btn_test_pos.setEnabled_(False)
+        self.btn_start.setEnabled_(False)
+        self.btn_test.setEnabled_(False)
+        self._beep()
+        self.lbl_pick.setStringValue_(T("lbl_rec_n", n=0))
+        self.add_log(T("log_rec_start"))
+
+    @objc.python_method
+    def _stop_recording(self, reason=""):
+        if not getattr(self, "recording", False):
+            return False
+        self.recording = False
+        try:
+            if self._rec_mon is not None:
+                NSEvent.removeMonitor_(self._rec_mon)
+        except Exception:
+            pass
+        self._rec_mon = None
+        self.btn_rec.setTitle_(T("btn_rec"))
+        self.btn_pick.setEnabled_(True)
+        self.btn_test_pos.setEnabled_(True)
+        self.btn_start.setEnabled_(True)
+        self.btn_test.setEnabled_(True)
+        self.lbl_pick.setStringValue_(T("lbl_pick_ready"))
+        pts = list(self._rec_points)
+        self._rec_points = []
+        if not pts:
+            self._chime()
+            self.add_log(T("log_rec_none"))
+            return True
+        # 末项间隔沿用前一项（间隔语义=点完再等，最后一击没有下一击可等）
+        if len(pts) >= 2:
+            pts[-1]["interval_ms"] = pts[-2]["interval_ms"]
+        else:
+            pts[-1]["interval_ms"] = 100.0
+        room = max(0, 200 - len(self._queue))
+        pts = pts[:room]
+        self._queue.extend(pts)
+        self._queue_sel = None
+        self._save_queue(self._queue)
+        self._refresh_queue_view()
+        self._chime()
+        self.add_log(T("log_rec_done", n=len(pts), t=len(self._queue)))
+        return True
+
+    @objc.python_method
+    def _rec_handler(self, event):
+        """全局左键监听：只抄录不拦截；落在本窗口内视为回 App → 收工。"""
+        if not getattr(self, "recording", False):
+            return
+        try:
+            x, y = self._event_cg_point(event)
+        except Exception:
+            return
+        try:
+            sh = float(CGDisplayBounds(CGMainDisplayID()).size.height)
+            wf = self.window.frame()
+            ax, ay = x, sh - y
+            if (wf.origin.x <= ax <= wf.origin.x + wf.size.width and
+                    wf.origin.y <= ay <= wf.origin.y + wf.size.height):
+                self._stop_recording("window")
+                return
+        except Exception:
+            pass
+        now = time.time()
+        gap = 0.0 if self._rec_last_ts is None else max(0.0, (now - self._rec_last_ts) * 1000.0)
+        if self._rec_points:
+            self._rec_points[-1]["interval_ms"] = round(gap, 1)   # 回填上一项的真实等待
+        self._rec_points.append({"x": int(x), "y": int(y), "count": 1, "interval_ms": 100.0})
+        self._rec_last_ts = now
+        self.lbl_pick.setStringValue_(T("lbl_rec_n", n=len(self._rec_points)))
+        if len(self._rec_points) >= 200:
+            self._stop_recording("limit")
+
+    @objc.python_method
+    def _event_cg_point(self, event):
+        try:
+            loc = CGEventGetLocation(event.CGEvent())
+            return int(loc.x), int(loc.y)
+        except Exception:
+            b = CGDisplayBounds(CGMainDisplayID())
+            ns = event.locationInWindow()
+            return int(ns.x), int(float(b.size.height) - ns.y)
+
+    @objc.python_method
+    def _hotkey_stop_hook(self):
+        """F9 / ⌘⇧X：正在连采时优先结束采集，否则返回 False 交给停止执行逻辑。"""
+        if getattr(self, "recording", False):
+            self._stop_recording("hotkey")
+            return True
+        return False
+
+    def applicationDidBecomeActive_(self, notification):
+        """回到 App（点 Dock / ⌘Tab）时若在连采，自动收工。"""
+        try:
+            if getattr(self, "recording", False):
+                self._stop_recording("activate")
+        except Exception:
+            pass
 
     def toggleMute_(self, sender):
         """静音复选框（action）：勾选后倒计时提示音不再播放。"""
@@ -1312,15 +1586,32 @@ class AppDelegate(NSObject):
         if getattr(self, "queue_view", None) is None:
             return
         if not getattr(self, "_queue", None):
-            self.queue_view.setString_(T("que_empty"))
+            self._queue_sel = None
+            self._suppress_sel = True
+            try:
+                self.queue_view.setString_(T("que_empty"))
+            finally:
+                self._suppress_sel = False
+            if getattr(self, "btn_qsave", None) is not None:
+                self.btn_qsave.setEnabled_(False)
             return
+        sel = getattr(self, "_queue_sel", None)
+        if sel is not None and sel >= len(self._queue):
+            sel = self._queue_sel = len(self._queue) - 1
         lines = []
         for i, q in enumerate(self._queue):
             c = int(q.get("count", 0) or 0)
-            lines.append("%d. (%d, %d)  ×%s  %gms" % (
-                i + 1, q["x"], q["y"], ("∞" if not c else c),
+            mark = "❯ " if i == sel else "  "
+            lines.append("%s%d. (%d, %d)  ×%s  %gms" % (
+                mark, i + 1, q["x"], q["y"], ("∞" if not c else c),
                 float(q.get("interval_ms", 0) or 0)))
-        self.queue_view.setString_("\n".join(lines))
+        self._suppress_sel = True
+        try:
+            self.queue_view.setString_("\n".join(lines))
+        finally:
+            self._suppress_sel = False
+        if getattr(self, "btn_qsave", None) is not None:
+            self.btn_qsave.setEnabled_(sel is not None)
 
     @objc.python_method
     def _save_queue(self, q):
