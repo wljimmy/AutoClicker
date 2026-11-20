@@ -40,6 +40,7 @@ from AppKit import (
     NSFontAttributeName,
     NSLineBreakByWordWrapping,
     NSTextAlignmentRight,
+    NSSavePanel, NSOpenPanel, NSModalResponseOK,
 )
 
 # ======================= Quartz（macOS 专用） =======================
@@ -97,14 +98,82 @@ def _data_dir():
 DATA_DIR = _data_dir()
 STOP_FLAG = os.path.join(DATA_DIR, "stop.flag")
 
-VERSION = "0.6.0"   # 版本号：UI 副标题 + 关于面板展示
+VERSION = "0.5.9"   # 版本号：UI 副标题 + 关于面板展示
 GITHUB_URL = "https://github.com/wljimmy/AutoClicker"
 # 版权三行（verbatim，用户锁定）
 COPYRIGHT_1 = "Bingo Studio"
 COPYRIGHT_2 = "wljimmy@hotmail.com"
 COPYRIGHT_3 = "本项目是由wljimmy使用doubao AI完成"
-SAVED_COORDS_PATH = os.path.join(DATA_DIR, "saved_coords.json")
-MULTI_POINTS_PATH = os.path.join(DATA_DIR, "multi_points.json")
+SAVED_COORDS_PATH = os.path.join(DATA_DIR, "saved_coords.json")   # 旧版单点文件（仅用于迁移）
+MULTI_POINTS_PATH = os.path.join(DATA_DIR, "multi_points.json")     # 旧版队列文件（仅用于迁移）
+DB_PATH = os.path.join(DATA_DIR, "database.json")                  # 工作库：队列 / 单点 / 当前队列
+DEF_PATH = os.path.join(DATA_DIR, "default_profile.json")          # 默认库：只有「设为默认」才写
+
+
+def _now_str():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _empty_db():
+    return {"schema": 1, "current": [], "queues": [], "singles": [], "updated": _now_str()}
+
+
+def _read_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def load_db(path=None):
+    """读工作库。文件不存在 → 从旧版 multi_points/saved_coords 迁移一份；再不然给空库。"""
+    path = path or DB_PATH
+    data = _read_json(path, None)
+    if isinstance(data, dict) and "schema" in data:
+        db = _empty_db()
+        db.update({k: data.get(k, db[k]) for k in ("current", "queues", "singles")})
+        db["updated"] = data.get("updated", db["updated"])
+        return db
+    # 首次运行 / 迁移
+    db = _empty_db()
+    legacy_q = _read_json(MULTI_POINTS_PATH, None)
+    if isinstance(legacy_q, list):
+        db["current"] = [q for q in legacy_q if isinstance(q, dict)]
+    legacy_c = _read_json(SAVED_COORDS_PATH, None)
+    if isinstance(legacy_c, list):
+        db["singles"] = [c for c in legacy_c if isinstance(c, dict) and "name" in c]
+    save_db(db, path)
+    return db
+
+
+def save_db(db, path=None):
+    """原子写：先写 .tmp 再 replace，避免写一半断电留下半个文件。"""
+    path = path or DB_PATH
+    db["updated"] = _now_str()
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+
+
+def ensure_default_db(path=None):
+    """默认库不存在时写入一份内置默认；已存在则一个字都不动。"""
+    path = path or DEF_PATH
+    if not os.path.exists(path):
+        save_db(_empty_db(), path)
+
+
+def read_default_db(path=None):
+    path = path or DEF_PATH
+    data = _read_json(path, None)
+    if isinstance(data, dict) and "schema" in data:
+        return data
+    return _empty_db()
 
 # ---- 鼠标晃动打断检测（打断性晃动 = 2 秒内 ≥3 次来回，每段 ≥200px） ----
 SWING_MIN_DIST = 200.0        # 相邻两个方向顶点之间最小距离(px)，>= 才算一次晃动段
@@ -149,6 +218,47 @@ I18N = {
     "btn_qsave":    {"zh": "💾 保存行", "en": "💾 Save Row"},
     "btn_qdel":     {"zh": "🗑 删除", "en": "🗑 Delete"},
     "btn_qclear":   {"zh": "清空", "en": "Clear"},
+    # ---- 队列标签 + 数据文档 ----
+    "lbl_qtag":     {"zh": "标签", "en": "Tag"},
+    "ph_qtag":      {"zh": "这个点是干嘛的（可选）", "en": "What this point does (opt.)"},
+    "lbl_qcount_s": {"zh": "次数", "en": "Times"},
+    "lbl_qint_s":   {"zh": "间隔", "en": "Gap"},
+    "tip_inf":      {"zh": "∞=一直点；每轮按整表循环\n标签可留空", "en": "∞=forever; loops whole list\nTag can be empty"},
+    "btn_data":     {"zh": "📚 数据", "en": "📚 Data"},
+    "panel_title":  {"zh": "数据文档", "en": "Data Library"},
+    "lbl_db_path":  {"zh": "库：{p}", "en": "File: {p}"},
+    "lbl_store_q":  {"zh": "队列名", "en": "Queue name"},
+    "ph_store_q":   {"zh": "给这条队列起个名", "en": "Name this queue"},
+    "btn_store_q":  {"zh": "💾 存为队列", "en": "💾 Save Queue"},
+    "lbl_saved_q":  {"zh": "已存队列", "en": "Saved queues"},
+    "btn_load_q":   {"zh": "载入", "en": "Load"},
+    "btn_del_q":    {"zh": "删除", "en": "Delete"},
+    "lbl_singles":  {"zh": "单点库", "en": "Saved points"},
+    "btn_export":   {"zh": "📤 导出", "en": "📤 Export"},
+    "btn_import":   {"zh": "📥 导入", "en": "📥 Import"},
+    "btn_set_def":  {"zh": "★ 设为默认", "en": "★ Set default"},
+    "btn_reset_def": {"zh": "↺ 恢复默认", "en": "↺ Restore default"},
+    "ph_none":      {"zh": "（空）", "en": "(empty)"},
+    "msg_q_over":   {"zh": "已存在同名队列「{n}」，覆盖它吗？", "en": "Queue \"{n}\" exists. Overwrite?"},
+    "msg_q_load":   {"zh": "载入「{n}」会替换当前队列（{k} 个点），继续？", "en": "Loading \"{n}\" replaces current queue ({k} points). Continue?"},
+    "msg_q_del":    {"zh": "删除队列「{n}」？不可撤销。", "en": "Delete queue \"{n}\"? Cannot undo."},
+    "msg_set_def":  {"zh": "把当前数据（队列 {q} 条 / 单点 {s} 个 / 当前队列 {c} 点）写为默认文档？\n默认文档平时不会被改动。",
+                     "en": "Set current data ({q} queues / {s} points / {c} in current) as default?\nDefault is never touched otherwise."},
+    "msg_reset_def": {"zh": "用默认文档覆盖当前数据？当前队列会被替换（导入前会自动备份）。",
+                      "en": "Overwrite current data with default? Current queue will be replaced (auto backup first)."},
+    "msg_import_bad": {"zh": "这个文件不是 AutoClicker 数据文档（缺少 schema 字段）。", "en": "Not an AutoClicker data file (no schema field)."},
+    "msg_import_ok": {"zh": "已导入：队列 {q} 条 / 单点 {s} 个。当前队列同步为导入版本。", "en": "Imported: {q} queues / {s} points. Current queue updated."},
+    "msg_export_ok": {"zh": "已导出到：{p}", "en": "Exported to: {p}"},
+    "log_q_store":  {"zh": "💾 队列已存为「{n}」（{k} 个点）", "en": "💾 Queue saved as \"{n}\" ({k} points)"},
+    "log_q_load":   {"zh": "📂 已载入队列「{n}」（{k} 个点）", "en": "📂 Queue loaded: \"{n}\" ({k} points)"},
+    "log_q_del":    {"zh": "🗑 队列「{n}」已删除", "en": "🗑 Queue \"{n}\" deleted"},
+    "log_db_setdef": {"zh": "★ 当前数据已设为默认文档", "en": "★ Default document updated"},
+    "log_db_reset": {"zh": "↺ 已恢复默认文档（旧数据备份在 database.bak.json）", "en": "↺ Restored default (old data -> database.bak.json)"},
+    "log_db_import": {"zh": "📥 已导入数据文档：队列 {q} 条 / 单点 {s} 个", "en": "📥 Imported: {q} queues / {s} points"},
+    "log_db_export": {"zh": "📤 已导出数据文档：{p}", "en": "📤 Exported: {p}"},
+    "alert_bad_file": {"zh": "文件不对", "en": "Bad file"},
+    "err_need_name": {"zh": "先给这条队列起个名字（队列名不能为空）。", "en": "Give this queue a name first."},
+    "err_empty_queue": {"zh": "当前队列是空的，没东西可存。先拾取/加入几个点。", "en": "Current queue is empty. Add some points first."},
     "lbl_qcount":   {"zh": "次数:", "en": "Times:"},
     "lbl_qint":     {"zh": "间隔(ms):", "en": "Gap(ms):"},
     "tip_queue":    {"zh": "点一行载入下方编辑→保存行；次数=0=一直点；每轮点完整队列再循环",
@@ -537,6 +647,10 @@ class HotkeyListener:
 # ======================= AppKit 原生 UI =======================
 class AppDelegate(NSObject):
     def applicationDidFinishLaunching_(self, notification):
+        # ---- 数据文档：工作库 + 默认库（默认库不参与日常写入）----
+        self._db = load_db()
+        ensure_default_db()
+        self.data_panel = None
         self.worker = None
         self.log_view = None
         self._beep_snd = None   # 倒计时"滴"音效缓存实例
@@ -566,6 +680,7 @@ class AppDelegate(NSObject):
             0.3, self, objc.selector(self.refresh_), None, True)
         self.add_log(T("log_ready"))
         self.check_accessibility()
+
 
         # 逃生通道③：真实鼠标移动即停（键盘被游戏抢走时，动一下鼠标就能夺回控制权）
         try:
@@ -878,77 +993,87 @@ class AppDelegate(NSObject):
         qscroll.setDocumentView_(self.queue_view)
         content.addSubview_(qscroll)
 
-        keep(self._label(T("lbl_qcount"), 16, 490, 40, 24), "lbl_qcount")
-        self.field_qcount = self._input("1", 56, 490, 50, 26)
+        # 标签行：这个点是干嘛的（可选，用于识别与二次修改）
+        keep(self._label(T("lbl_qtag"), 16, 494, 34, 22), "lbl_qtag")
+        self.field_qtag = self._input("", 52, 492, 164, 26)
+        self.field_qtag.setPlaceholderString_(T("ph_qtag"))
+        keep(self.field_qtag, None)
+        keep(self._label(T("lbl_qcount_s"), 222, 494, 32, 22), "lbl_qcount_s")
+        self.field_qcount = self._input("1", 256, 492, 46, 26)
         content.addSubview_(self.field_qcount)
-        keep(self._label(T("lbl_qint"), 112, 490, 56, 24), "lbl_qint")
-        self.field_qint = self._input("100", 168, 490, 56, 26)
+        keep(self._label(T("lbl_qint_s"), 308, 494, 54, 22), "lbl_qint_s")
+        self.field_qint = self._input("100", 364, 492, 54, 26)
         content.addSubview_(self.field_qint)
-        self.btn_qadd = self._button(T("btn_qadd"), 230, 488, 104, 30, self.queueAdd_)
+        keep(self._multiline_label(T("tip_inf"), 424, 490, 150, 30, font_size=9), "tip_inf")
+
+        self.btn_qadd = self._button(T("btn_qadd"), 16, 458, 104, 30, self.queueAdd_)
         keep(self.btn_qadd, "btn_qadd")
-        self.btn_qsave = self._button(T("btn_qsave"), 340, 488, 90, 30, self.queueSaveRow_)
+        self.btn_qsave = self._button(T("btn_qsave"), 126, 458, 96, 30, self.queueSaveRow_)
         self.btn_qsave.setEnabled_(False)
         keep(self.btn_qsave, "btn_qsave")
-        self.btn_qdel = self._button(T("btn_qdel"), 436, 488, 74, 30, self.queueDel_)
+        self.btn_qdel = self._button(T("btn_qdel"), 228, 458, 76, 30, self.queueDel_)
         keep(self.btn_qdel, "btn_qdel")
-        self.btn_qclear = self._button(T("btn_qclear"), 516, 488, 68, 30, self.queueClear_)
+        self.btn_qclear = self._button(T("btn_qclear"), 310, 458, 76, 30, self.queueClear_)
         keep(self.btn_qclear, "btn_qclear")
-        keep(self._multiline_label(T("tip_queue"), 16, 464, 568, 18, font_size=9), "tip_queue")
-        content.addSubview_(self._separator(16, 458, 568))
+        # 数据文档入口（独立面板）
+        self.btn_data = self._button(T("btn_data"), 472, 458, 112, 30, self.openDataPanel_)
+        keep(self.btn_data, "btn_data")
+        keep(self._multiline_label(T("tip_queue"), 16, 436, 568, 16, font_size=9), "tip_queue")
+        content.addSubview_(self._separator(16, 430, 568))
 
         # ---------- ② 运行设置 ----------
-        keep(self._group_title(T("grp2"), 16, 424), "grp2")
-        keep(self._label(T("lbl_mode"), 16, 392, 96, 24), "lbl_mode")
+        keep(self._group_title(T("grp2"), 16, 396), "grp2")
+        keep(self._label(T("lbl_mode"), 16, 364, 96, 24), "lbl_mode")
         self.popup_mode = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(116, 392, 190, 26), False)
+            NSMakeRect(116, 364, 190, 26), False)
         self.popup_mode.addItemsWithTitles_([T("mode_duration"), T("mode_count"), T("mode_queue")])
         self.popup_mode.menu().setAutoenablesItems_(False)
         content.addSubview_(self.popup_mode)
-        keep(self._label(T("lbl_value"), 312, 392, 60, 24), "lbl_value")
-        self.field_value = self._input("60", 372, 392, 62, 26)
+        keep(self._label(T("lbl_value"), 312, 364, 60, 24), "lbl_value")
+        self.field_value = self._input("60", 372, 364, 62, 26)
         keep(self.field_value, None)
         # 静音开关
         self.chk_mute = NSButton.checkboxWithTitle_target_action_(
             T("chk_mute"), self, objc.selector(self.toggleMute_))
-        self.chk_mute.setFrame_(NSMakeRect(446, 390, 138, 24))
+        self.chk_mute.setFrame_(NSMakeRect(446, 362, 138, 24))
         self.chk_mute.setState_(0)
         self.chk_mute.setFont_(NSFont.systemFontOfSize_(12))
         keep(self.chk_mute, "chk_mute")
-        keep(self._multiline_label(T("tip_stop"), 16, 362, 568, 18, font_size=9), "tip_stop")
-        content.addSubview_(self._separator(16, 354, 568))
+        keep(self._multiline_label(T("tip_stop"), 16, 334, 568, 18, font_size=9), "tip_stop")
+        content.addSubview_(self._separator(16, 326, 568))
 
         # ---------- ③ 控制 ----------
-        keep(self._group_title(T("grp3"), 16, 320), "grp3")
-        self.btn_start = self._button(T("btn_start"), 16, 276, 140, 34, self.start_)
+        keep(self._group_title(T("grp3"), 16, 292), "grp3")
+        self.btn_start = self._button(T("btn_start"), 16, 248, 140, 34, self.start_)
         keep(self.btn_start, "btn_start")
-        self.btn_test = self._button(T("btn_test10"), 166, 276, 148, 34, self.test_)
+        self.btn_test = self._button(T("btn_test10"), 166, 248, 148, 34, self.test_)
         keep(self.btn_test, "btn_test10")
-        self.btn_stop = self._button(T("btn_stop"), 324, 276, 140, 34, self.stop_)
+        self.btn_stop = self._button(T("btn_stop"), 324, 248, 140, 34, self.stop_)
         self.btn_stop.setEnabled_(False)
         keep(self.btn_stop, "btn_stop")
 
-        self.lbl_status = self._label(T("status_idle"), 16, 240, 180, 22)
+        self.lbl_status = self._label(T("status_idle"), 16, 212, 180, 22)
         content.addSubview_(self.lbl_status)
-        self.lbl_count = self._label(T("lbl_count", n=0), 204, 240, 150, 22)
+        self.lbl_count = self._label(T("lbl_count", n=0), 204, 212, 150, 22)
         content.addSubview_(self.lbl_count)
-        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 240, 220, 22)
+        self.lbl_rate = self._label(T("lbl_rate", r=0.0), 360, 212, 220, 22)
         content.addSubview_(self.lbl_rate)
 
         # ---- 倒计时状态行：已过 / 剩余 / 总计 ----
-        self.lbl_elapsed = self._label(T("lbl_elapsed", t="00:00:00"), 16, 212, 190, 20, bold=True)
+        self.lbl_elapsed = self._label(T("lbl_elapsed", t="00:00:00"), 16, 184, 190, 20, bold=True)
         content.addSubview_(self.lbl_elapsed)
-        self.lbl_left = self._label(T("lbl_left", t="00:00:00"), 214, 212, 190, 20, bold=True)
+        self.lbl_left = self._label(T("lbl_left", t="00:00:00"), 214, 184, 190, 20, bold=True)
         content.addSubview_(self.lbl_left)
-        self.lbl_total = self._label(T("lbl_total", t="00:00:00"), 410, 212, 174, 20)
+        self.lbl_total = self._label(T("lbl_total", t="00:00:00"), 410, 184, 174, 20)
         self.lbl_total.setAlignment_(NSTextAlignmentRight)
         content.addSubview_(self.lbl_total)
 
         # ---------- 日志 ----------
-        keep(self._label(T("log_title"), 16, 186, 200, 20, bold=True), "log_title")
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 168))
+        keep(self._label(T("log_title"), 16, 158, 200, 20, bold=True), "log_title")
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(10, 10, 580, 140))
         scroll.setHasVerticalScroller_(True)
         scroll.setAutohidesScrollers_(True)
-        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 168))
+        self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 560, 140))
         self.log_view.setEditable_(False)
         self.log_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
         self.log_view.setBackgroundColor_(NSColor.textBackgroundColor())
@@ -1081,6 +1206,261 @@ class AppDelegate(NSObject):
         alert.setMessageText_(title)
         alert.setInformativeText_(msg)
         alert.runModal()
+
+    # ================= 数据文档（独立面板） =================
+
+    def openDataPanel_(self, sender):
+        if getattr(self, "data_panel", None) is None:
+            self._build_data_panel()
+        self._refresh_data_panel()
+        self.data_panel.makeKeyAndOrderFront_(None)
+
+    @objc.python_method
+    def _build_data_panel(self):
+        rect = NSMakeRect(0, 0, 520, 420)
+        style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+        win = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            rect, style, NSBackingStoreBuffered, False)
+        win.setTitle_(T("panel_title"))
+        win.setReleasedWhenClosed_(False)
+        win.setFrame_display_(NSMakeRect(1170, 420, 520, 420), True)
+        content = win.contentView()
+
+        content.addSubview_(self._separator(16, 360, 488))
+
+        # ---- 存队列 ----
+        content.addSubview_(self._label(T("lbl_store_q"), 16, 318, 64, 22))
+        self.field_store_q = self._input("", 84, 316, 236, 26)
+        self.field_store_q.setPlaceholderString_(T("ph_store_q"))
+        content.addSubview_(self.field_store_q)
+        self.btn_store_q = self._button(T("btn_store_q"), 328, 314, 122, 30, self.storeQueue_)
+        content.addSubview_(self.btn_store_q)
+
+        # ---- 已存队列 ----
+        content.addSubview_(self._label(T("lbl_saved_q"), 16, 282, 200, 22))
+        self.popup_dq = NSPopUpButton.alloc().initWithFrame_pullsDown_(NSMakeRect(16, 252, 300, 26), False)
+        self.popup_dq.menu().setAutoenablesItems_(False)
+        content.addSubview_(self.popup_dq)
+        self.btn_load_q = self._button(T("btn_load_q"), 326, 250, 78, 28, self.loadQueue_)
+        content.addSubview_(self.btn_load_q)
+        self.btn_del_q = self._button(T("btn_del_q"), 412, 250, 78, 28, self.delQueue_)
+        content.addSubview_(self.btn_del_q)
+        content.addSubview_(self._separator(16, 238, 488))
+
+        # ---- 单点库 ----
+        content.addSubview_(self._label(T("lbl_singles"), 16, 212, 200, 22))
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(16, 140, 488, 64))
+        scroll.setHasVerticalScroller_(True)
+        scroll.setAutohidesScrollers_(True)
+        self.singles_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 470, 64))
+        self.singles_view.setEditable_(False)
+        self.singles_view.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        self.singles_view.setBackgroundColor_(NSColor.textBackgroundColor())
+        self.singles_view.setTextColor_(NSColor.textColor())
+        self.singles_view.setTextContainerInset_((4, 4))
+        scroll.setDocumentView_(self.singles_view)
+        content.addSubview_(scroll)
+        content.addSubview_(self._separator(16, 130, 488))
+
+        # ---- 文件操作 ----
+        self.btn_export = self._button(T("btn_export"), 16, 90, 116, 32, self.exportDB_)
+        content.addSubview_(self.btn_export)
+        self.btn_import = self._button(T("btn_import"), 140, 90, 116, 32, self.importDB_)
+        content.addSubview_(self.btn_import)
+        self.btn_set_def = self._button(T("btn_set_def"), 262, 90, 120, 32, self.setDefaultDB_)
+        content.addSubview_(self.btn_set_def)
+        self.btn_reset_def = self._button(T("btn_reset_def"), 390, 90, 114, 32, self.restoreDefaultDB_)
+        content.addSubview_(self.btn_reset_def)
+
+        self.lbl_panel_info = self._multiline_label("", 16, 44, 488, 40, font_size=9)
+        content.addSubview_(self.lbl_panel_info)
+        self.lbl_panel_path = self._label("", 16, 14, 488, 18, small=True)
+        content.addSubview_(self.lbl_panel_path)
+
+        self.data_panel = win
+
+    @objc.python_method
+    def _refresh_data_panel(self):
+        if getattr(self, "data_panel", None) is None:
+            return
+        # 队列下拉
+        try:
+            self.popup_dq.removeAllItems()
+            self.popup_dq.addItemWithTitle_(T("lbl_saved_q") + (" (%d)" % len(self._db.get("queues") or [])))
+            for q in (self._db.get("queues") or []):
+                n = len(q.get("points") or [])
+                self.popup_dq.addItemWithTitle_("%s (%d)" % (q.get("name", "?"), n))
+            self.popup_dq.selectItemAtIndex_(0)
+        except Exception:
+            pass
+        # 单点库
+        try:
+            items = self._db.get("singles") or []
+            if items:
+                txt = "\n".join("%d. %s  (%d, %d)" % (i + 1, c.get("name", "?"), c.get("x", 0), c.get("y", 0))
+                                for i, c in enumerate(items))
+            else:
+                txt = T("ph_none")
+            self.singles_view.setString_(txt)
+        except Exception:
+            pass
+        # 路径与统计
+        try:
+            self.lbl_panel_path.setStringValue_(T("lbl_db_path", p="database.json  ·  default_profile.json（同目录）"))
+            self.lbl_panel_info.setStringValue_(
+                "最后保存：%s\n导出/导入都是整库；默认文档只有「设为默认」才动它" % self._db.get("updated", "-"))
+        except Exception:
+            pass
+
+    def storeQueue_(self, sender):
+        try:
+            name = str(self.field_store_q.stringValue()).strip()[:32]
+            if not name:
+                self.show_alert(T("alert_notice"), T("err_need_name")); return
+            if not getattr(self, "_queue", None):
+                self.show_alert(T("alert_notice"), T("err_empty_queue")); return
+            queues = self._db.setdefault("queues", [])
+            idx = next((i for i, q in enumerate(queues) if q.get("name") == name), None)
+            pts = [dict(p) for p in self._queue]
+            if idx is not None:
+                if self.show_alert_choice(T("alert_notice"), T("msg_q_over", n=name),
+                                          T("btn_continue"), T("btn_stop")) != "continue":
+                    return
+                queues[idx] = {"name": name, "points": pts, "updated": _now_str()}
+            else:
+                queues.append({"name": name, "points": pts, "updated": _now_str()})
+            save_db(self._db)
+            self.field_store_q.setStringValue_("")
+            self.add_log(T("log_q_store", n=name, k=len(pts)))
+            self._refresh_data_panel()
+        except Exception as e:
+            self.add_log("storeQueue err: %r" % (e,))
+
+    def loadQueue_(self, sender):
+        try:
+            i = self.popup_dq.indexOfSelectedItem()
+            if i <= 0:
+                return
+            q = (self._db.get("queues") or [])[i - 1]
+            pts = q.get("points") or []
+            if self.show_alert_choice(T("alert_notice"),
+                                      T("msg_q_load", n=q.get("name", "?"), k=len(pts)),
+                                      T("btn_continue"), T("btn_stop")) != "continue":
+                return
+            self._queue = [{"x": int(p.get("x", 0)), "y": int(p.get("y", 0)),
+                            "count": int(p.get("count", 0) or 0),
+                            "interval_ms": float(p.get("interval_ms", 0) or 0),
+                            "name": str(p.get("name", "") or "")} for p in pts]
+            self._queue_sel = None
+            self.field_qtag.setStringValue_("")
+            self._save_queue(self._queue)
+            self._refresh_queue_view()
+            self.add_log(T("log_q_load", n=q.get("name", "?"), k=len(self._queue)))
+        except Exception as e:
+            self.add_log("loadQueue err: %r" % (e,))
+
+    def delQueue_(self, sender):
+        try:
+            i = self.popup_dq.indexOfSelectedItem()
+            if i <= 0:
+                return
+            q = (self._db.get("queues") or [])[i - 1]
+            if self.show_alert_choice(T("alert_notice"), T("msg_q_del", n=q.get("name", "?")),
+                                      T("btn_continue"), T("btn_stop")) != "continue":
+                return
+            name = q.get("name", "?")
+            self._db["queues"].pop(i - 1)
+            save_db(self._db)
+            self.add_log(T("log_q_del", n=name))
+            self._refresh_data_panel()
+        except Exception as e:
+            self.add_log("delQueue err: %r" % (e,))
+
+    def exportDB_(self, sender):
+        try:
+            sp = NSSavePanel.savePanel()
+            sp.setNameFieldStringValue_("AutoClicker-data.json")
+            try:
+                sp.setAllowedFileTypes_(["json"])
+            except Exception:
+                pass
+            if sp.runModal() != NSModalResponseOK:
+                return
+            path = sp.URL().path()
+            if save_db(dict(self._db), path):
+                self.add_log(T("log_db_export", p=path))
+                self.show_alert(T("panel_title"), T("msg_export_ok", p=path))
+            else:
+                self.add_log("exportDB failed")
+        except Exception as e:
+            self.add_log("exportDB err: %r" % (e,))
+
+    def importDB_(self, sender):
+        try:
+            op = NSOpenPanel.openPanel()
+            op.setCanChooseFiles_(True)
+            op.setCanChooseDirectories_(False)
+            op.setAllowsMultipleSelection_(False)
+            try:
+                op.setAllowedFileTypes_(["json"])
+            except Exception:
+                pass
+            if op.runModal() != NSModalResponseOK:
+                return
+            path = op.URL().path()
+            data = _read_json(path, None)
+            if not (isinstance(data, dict) and "schema" in data):
+                self.show_alert(T("alert_bad_file"), T("msg_import_bad"))
+                return
+            # 先备份当前库，再覆盖
+            save_db(self._db, DB_PATH + ".bak.json")
+            ndb = _empty_db()
+            ndb["current"] = [p for p in (data.get("current") or []) if isinstance(p, dict)]
+            ndb["queues"] = [q for q in (data.get("queues") or []) if isinstance(q, dict)]
+            ndb["singles"] = [c for c in (data.get("singles") or []) if isinstance(c, dict)]
+            self._db = ndb
+            save_db(self._db)
+            self._queue = self._load_queue()
+            self._queue_sel = None
+            self._refresh_queue_view()
+            self._reload_saved_list()
+            self.add_log(T("log_db_import", q=len(ndb["queues"]), s=len(ndb["singles"])))
+            self._refresh_data_panel()
+            self.show_alert(T("panel_title"), T("msg_import_ok", q=len(ndb["queues"]), s=len(ndb["singles"])))
+        except Exception as e:
+            self.add_log("importDB err: %r" % (e,))
+
+    def setDefaultDB_(self, sender):
+        try:
+            if self.show_alert_choice(
+                    T("alert_notice"),
+                    T("msg_set_def", q=len(self._db.get("queues") or []),
+                      s=len(self._db.get("singles") or []),
+                      c=len(self._db.get("current") or [])),
+                    T("btn_continue"), T("btn_stop")) != "continue":
+                return
+            save_db(self._db, DEF_PATH)
+            self.add_log(T("log_db_setdef"))
+            self._refresh_data_panel()
+        except Exception as e:
+            self.add_log("setDefaultDB err: %r" % (e,))
+
+    def restoreDefaultDB_(self, sender):
+        try:
+            if self.show_alert_choice(T("alert_notice"), T("msg_reset_def"),
+                                      T("btn_continue"), T("btn_stop")) != "continue":
+                return
+            save_db(self._db, DB_PATH + ".bak.json")   # 备份现有
+            self._db = read_default_db()
+            save_db(self._db)
+            self._queue = self._load_queue()
+            self._queue_sel = None
+            self._refresh_queue_view()
+            self._reload_saved_list()
+            self.add_log(T("log_db_reset"))
+            self._refresh_data_panel()
+        except Exception as e:
+            self.add_log("restoreDefaultDB err: %r" % (e,))
 
     # ---------- 动作 ----------
     @objc.python_method
@@ -1300,20 +1680,12 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _save_coords(self, coords):
-        try:
-            with open(SAVED_COORDS_PATH, "w", encoding="utf-8") as f:
-                json.dump(coords, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        self._db["singles"] = [dict(c) for c in coords]
+        save_db(self._db)
 
     @objc.python_method
     def _load_coords(self):
-        try:
-            with open(SAVED_COORDS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, list) else []
-        except Exception:
-            return []
+        return [dict(c) for c in (self._db.get("singles") or []) if isinstance(c, dict)]
 
     @objc.python_method
     def _set_running(self, running):
@@ -1332,6 +1704,14 @@ class AppDelegate(NSObject):
             self.lbl_total.setStringValue_(T("lbl_total", t="00:00:00"))
 
     # ---------- 多点队列 ----------
+    @objc.python_method
+    def _read_tag(self):
+        """读标签框：去空白、限 24 字，避免列表被名字撑爆。"""
+        try:
+            return str(self.field_qtag.stringValue()).strip()[:24]
+        except Exception:
+            return ""
+
     def queueAdd_(self, sender):
         """X/Y + 次数 + 间隔入队；有选中行则插到其后（action，勿加 python_method）。"""
         try:
@@ -1348,7 +1728,8 @@ class AppDelegate(NSObject):
         if len(getattr(self, "_queue", [])) >= 200:
             self.show_alert(T("alert_notice"), T("err_count", n=200))
             return
-        item = {"x": x, "y": y, "count": cnt, "interval_ms": iv}
+        tag = self._read_tag()
+        item = {"x": x, "y": y, "count": cnt, "interval_ms": iv, "name": tag}
         sel = getattr(self, "_queue_sel", None)
         if sel is not None and 0 <= sel < len(self._queue):
             self._queue.insert(sel + 1, item)       # 插到选中行之后
@@ -1381,7 +1762,8 @@ class AppDelegate(NSObject):
         if cnt < 0 or iv < 0:
             self.show_alert(T("alert_bad"), T("err_interval"))
             return
-        self._queue[sel] = {"x": x, "y": y, "count": cnt, "interval_ms": iv}
+        self._queue[sel] = {"x": x, "y": y, "count": cnt, "interval_ms": iv,
+                            "name": self._read_tag()}
         self._save_queue(self._queue)
         self._refresh_queue_view()
         self.add_log(T("log_queue_save", i=sel + 1, x=x, y=y,
@@ -1433,6 +1815,7 @@ class AppDelegate(NSObject):
             self.field_y.setStringValue_(str(q.get("y", "")))
             self.field_qcount.setStringValue_(str(int(q.get("count", 0) or 0)))
             self.field_qint.setStringValue_("%g" % float(q.get("interval_ms", 0) or 0))
+            self.field_qtag.setStringValue_(str(q.get("name", "") or ""))
             self.btn_qsave.setEnabled_(True)
             if getattr(self, "_queue_sel", None) != line:
                 self._queue_sel = line
@@ -1602,8 +1985,10 @@ class AppDelegate(NSObject):
         for i, q in enumerate(self._queue):
             c = int(q.get("count", 0) or 0)
             mark = "❯ " if i == sel else "  "
-            lines.append("%s%d. (%d, %d)  ×%s  %gms" % (
-                mark, i + 1, q["x"], q["y"], ("∞" if not c else c),
+            tag = str(q.get("name", "") or "").strip()
+            tag_s = (tag + " ") if tag else ""
+            lines.append("%s%d. %s(%d, %d)  ×%s  %gms" % (
+                mark, i + 1, tag_s, q["x"], q["y"], ("∞" if not c else c),
                 float(q.get("interval_ms", 0) or 0)))
         self._suppress_sel = True
         try:
@@ -1615,25 +2000,20 @@ class AppDelegate(NSObject):
 
     @objc.python_method
     def _save_queue(self, q):
-        try:
-            with open(MULTI_POINTS_PATH, "w", encoding="utf-8") as f:
-                json.dump(q, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        self._db["current"] = [dict(i) for i in q]
+        save_db(self._db)
 
     @objc.python_method
     def _load_queue(self):
-        try:
-            with open(MULTI_POINTS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            out = []
-            for q in (data if isinstance(data, list) else []):
-                out.append({"x": int(q.get("x", 0)), "y": int(q.get("y", 0)),
-                            "count": int(q.get("count", 0) or 0),
-                            "interval_ms": float(q.get("interval_ms", 0) or 0)})
-            return out
-        except Exception:
-            return []
+        out = []
+        for q in (self._db.get("current") or []):
+            if not isinstance(q, dict):
+                continue
+            out.append({"x": int(q.get("x", 0)), "y": int(q.get("y", 0)),
+                        "count": int(q.get("count", 0) or 0),
+                        "interval_ms": float(q.get("interval_ms", 0) or 0),
+                        "name": str(q.get("name", "") or "")})
+        return out
 
     @objc.python_method
     def _update_clock(self, w):
